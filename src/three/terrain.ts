@@ -17,7 +17,11 @@ function makeSeededRng(seedStr: string) {
   };
 }
 
-function createHexPrismGeometry(radius: number, depth: number, bevel = 0.04): THREE.ExtrudeGeometry {
+function createHexPrismGeometry(
+  radius: number,
+  depth: number,
+  bevel = 0.04,
+): THREE.ExtrudeGeometry {
   const shape = new THREE.Shape();
   for (let i = 0; i < 6; i++) {
     const angle = (Math.PI / 180) * (60 * i - 30);
@@ -39,15 +43,33 @@ function createHexPrismGeometry(radius: number, depth: number, bevel = 0.04): TH
   return geo;
 }
 
+export interface TerrainTileBuildResult {
+  group: THREE.Group;
+  swayTrees: THREE.Object3D[];
+  windmills: THREE.Object3D[];
+}
+
 export interface TerrainAssets {
   baseGeo: THREE.ExtrudeGeometry;
   rimGeo: THREE.ExtrudeGeometry;
   tokenGeo: THREE.CylinderGeometry;
+  tokenFaceGeo: THREE.CircleGeometry;
+  treeTrunkGeo: THREE.CylinderGeometry;
+  treeConeGeo: THREE.ConeGeometry;
+  fernGeo: THREE.ConeGeometry;
+  flowerGeo: THREE.SphereGeometry;
+  wheatStalkGeo: THREE.CylinderGeometry;
+  wheatHeadGeo: THREE.ConeGeometry;
+  boulderGeo: THREE.DodecahedronGeometry;
+  brickGeo: THREE.BoxGeometry;
+  fencePostGeo: THREE.BoxGeometry;
+  fenceRailGeo: THREE.BoxGeometry;
   materials: {
     rimEarth: THREE.MeshStandardMaterial;
     terrainTop: Record<TerrainType, THREE.MeshStandardMaterial>;
     bark: THREE.MeshStandardMaterial;
     pineLeaves: THREE.MeshStandardMaterial[];
+    fernGreen: THREE.MeshStandardMaterial;
     rockGrey: THREE.MeshStandardMaterial;
     rockDark: THREE.MeshStandardMaterial;
     snowCap: THREE.MeshStandardMaterial;
@@ -55,7 +77,9 @@ export interface TerrainAssets {
     clayRed: THREE.MeshStandardMaterial;
     clayBrick: THREE.MeshStandardMaterial;
     wheatGold: THREE.MeshStandardMaterial;
+    wheatEar: THREE.MeshStandardMaterial;
     wheatBarn: THREE.MeshStandardMaterial;
+    windmillSail: THREE.MeshStandardMaterial;
     sheepWool: THREE.MeshStandardMaterial;
     sheepFace: THREE.MeshStandardMaterial;
     fenceWood: THREE.MeshStandardMaterial;
@@ -63,6 +87,7 @@ export interface TerrainAssets {
     flowerWhite: THREE.MeshStandardMaterial;
     sandDune: THREE.MeshStandardMaterial;
     cactusGreen: THREE.MeshStandardMaterial;
+    oasisWater: THREE.MeshStandardMaterial;
     tokenBrass: THREE.MeshStandardMaterial;
   };
   dispose: () => void;
@@ -71,16 +96,28 @@ export interface TerrainAssets {
 export function createTerrainAssets(textures: ProceduralTextureSet): TerrainAssets {
   const baseGeo = createHexPrismGeometry(HEX_RADIUS * 0.965, 0.22, 0.035);
   const rimGeo = createHexPrismGeometry(HEX_RADIUS * 0.99, 0.28, 0.025);
-  const tokenGeo = new THREE.CylinderGeometry(0.42, 0.44, 0.07, 28);
+  const tokenGeo = new THREE.CylinderGeometry(0.425, 0.445, 0.072, 28);
+  const tokenFaceGeo = new THREE.CircleGeometry(0.39, 28);
+  const treeTrunkGeo = new THREE.CylinderGeometry(0.03, 0.06, 0.26, 7);
+  const treeConeGeo = new THREE.ConeGeometry(0.22, 0.24, 7);
+  const fernGeo = new THREE.ConeGeometry(0.085, 0.09, 5);
+  const flowerGeo = new THREE.SphereGeometry(0.028, 6, 5);
+  const wheatStalkGeo = new THREE.CylinderGeometry(0.015, 0.022, 0.24, 5);
+  const wheatHeadGeo = new THREE.ConeGeometry(0.042, 0.12, 5);
+  const boulderGeo = new THREE.DodecahedronGeometry(0.09, 0);
+  const brickGeo = new THREE.BoxGeometry(0.11, 0.055, 0.065);
+  const fencePostGeo = new THREE.BoxGeometry(0.035, 0.14, 0.035);
+  const fenceRailGeo = new THREE.BoxGeometry(0.54, 0.024, 0.02);
 
   const terrainTop = {} as Record<TerrainType, THREE.MeshStandardMaterial>;
   (['forest', 'pasture', 'fields', 'hills', 'mountains', 'desert'] as TerrainType[]).forEach(
     (t) => {
       terrainTop[t] = new THREE.MeshStandardMaterial({
         map: textures.terrainMaps[t],
-        bumpMap: textures.terrainBump,
-        bumpScale: 0.035,
-        roughness: t === 'desert' ? 0.9 : 0.82,
+        normalMap: textures.terrainNormal,
+        normalScale: new THREE.Vector2(0.7, 0.7),
+        roughnessMap: textures.terrainRoughness,
+        roughness: t === 'desert' ? 0.92 : 0.84,
         metalness: 0.03,
       });
     },
@@ -88,75 +125,99 @@ export function createTerrainAssets(textures: ProceduralTextureSet): TerrainAsse
 
   const materials = {
     rimEarth: new THREE.MeshStandardMaterial({
-      color: 0x5c4b39,
+      color: 0x594735,
       roughness: 0.9,
       metalness: 0.02,
-      bumpMap: textures.terrainBump,
-      bumpScale: 0.03,
+      normalMap: textures.terrainNormal,
+      normalScale: new THREE.Vector2(0.85, 0.85),
     }),
     terrainTop,
-    bark: new THREE.MeshStandardMaterial({ color: 0x4d3221, roughness: 0.9 }),
+    bark: new THREE.MeshStandardMaterial({
+      color: 0x4d311f,
+      roughness: 0.9,
+      normalMap: textures.woodMahoganyNormal,
+      normalScale: new THREE.Vector2(0.6, 0.6),
+    }),
     pineLeaves: [
-      new THREE.MeshStandardMaterial({ color: 0x264f2a, roughness: 0.78 }),
-      new THREE.MeshStandardMaterial({ color: 0x316233, roughness: 0.76 }),
-      new THREE.MeshStandardMaterial({ color: 0x1d4023, roughness: 0.82 }),
+      new THREE.MeshStandardMaterial({ color: 0x244d28, roughness: 0.78 }),
+      new THREE.MeshStandardMaterial({ color: 0x316232, roughness: 0.75 }),
+      new THREE.MeshStandardMaterial({ color: 0x1b3d20, roughness: 0.82 }),
     ],
+    fernGreen: new THREE.MeshStandardMaterial({ color: 0x427536, roughness: 0.76 }),
     rockGrey: new THREE.MeshStandardMaterial({
-      color: 0x71777e,
+      color: 0x747b82,
       roughness: 0.86,
       metalness: 0.08,
       flatShading: true,
     }),
     rockDark: new THREE.MeshStandardMaterial({
-      color: 0x4d5259,
+      color: 0x4a5057,
       roughness: 0.88,
       metalness: 0.14,
       flatShading: true,
     }),
     snowCap: new THREE.MeshStandardMaterial({
-      color: 0xf4f7fa,
-      roughness: 0.42,
-      metalness: 0.05,
+      color: 0xf4f7fb,
+      roughness: 0.4,
+      metalness: 0.04,
       flatShading: true,
     }),
     oreVein: new THREE.MeshStandardMaterial({
-      color: 0x3b4859,
-      roughness: 0.35,
-      metalness: 0.65,
+      color: 0x44566c,
+      roughness: 0.28,
+      metalness: 0.74,
       flatShading: true,
     }),
     clayRed: new THREE.MeshStandardMaterial({
-      color: 0xa84b31,
-      roughness: 0.85,
+      color: 0xa64a30,
+      roughness: 0.84,
       flatShading: true,
     }),
     clayBrick: new THREE.MeshStandardMaterial({
-      color: 0xc25a3c,
-      roughness: 0.78,
+      color: 0xc75c3d,
+      roughness: 0.76,
     }),
     wheatGold: new THREE.MeshStandardMaterial({
-      color: 0xe3b448,
-      roughness: 0.72,
-    }),
-    wheatBarn: new THREE.MeshStandardMaterial({
-      color: 0x8f3929,
+      color: 0xdfb042,
       roughness: 0.74,
     }),
-    sheepWool: new THREE.MeshStandardMaterial({ color: 0xf5f0e1, roughness: 0.92 }),
-    sheepFace: new THREE.MeshStandardMaterial({ color: 0x332d28, roughness: 0.8 }),
-    fenceWood: new THREE.MeshStandardMaterial({ color: 0x735235, roughness: 0.85 }),
-    flowerYellow: new THREE.MeshStandardMaterial({ color: 0xf2cf52, roughness: 0.6 }),
-    flowerWhite: new THREE.MeshStandardMaterial({ color: 0xfaf6eb, roughness: 0.6 }),
+    wheatEar: new THREE.MeshStandardMaterial({
+      color: 0xf0c95e,
+      roughness: 0.68,
+    }),
+    wheatBarn: new THREE.MeshStandardMaterial({
+      color: 0x8f3728,
+      roughness: 0.74,
+    }),
+    windmillSail: new THREE.MeshStandardMaterial({
+      color: 0xf4ead3,
+      roughness: 0.78,
+    }),
+    sheepWool: new THREE.MeshStandardMaterial({ color: 0xf6f1e4, roughness: 0.92 }),
+    sheepFace: new THREE.MeshStandardMaterial({ color: 0x2f2924, roughness: 0.8 }),
+    fenceWood: new THREE.MeshStandardMaterial({
+      color: 0x735235,
+      roughness: 0.85,
+      normalMap: textures.woodMahoganyNormal,
+      normalScale: new THREE.Vector2(0.4, 0.4),
+    }),
+    flowerYellow: new THREE.MeshStandardMaterial({ color: 0xf5d256, roughness: 0.58 }),
+    flowerWhite: new THREE.MeshStandardMaterial({ color: 0xfcf8ee, roughness: 0.58 }),
     sandDune: new THREE.MeshStandardMaterial({
       color: 0xdcb977,
       roughness: 0.92,
       flatShading: true,
     }),
-    cactusGreen: new THREE.MeshStandardMaterial({ color: 0x4b7543, roughness: 0.75 }),
+    cactusGreen: new THREE.MeshStandardMaterial({ color: 0x4b7743, roughness: 0.74 }),
+    oasisWater: new THREE.MeshStandardMaterial({
+      color: 0x2c8da1,
+      roughness: 0.16,
+      metalness: 0.15,
+    }),
     tokenBrass: new THREE.MeshStandardMaterial({
-      color: 0xb69049,
-      roughness: 0.32,
-      metalness: 0.75,
+      color: 0xc2994c,
+      roughness: 0.28,
+      metalness: 0.82,
     }),
   };
 
@@ -164,15 +225,38 @@ export function createTerrainAssets(textures: ProceduralTextureSet): TerrainAsse
     baseGeo,
     rimGeo,
     tokenGeo,
+    tokenFaceGeo,
+    treeTrunkGeo,
+    treeConeGeo,
+    fernGeo,
+    flowerGeo,
+    wheatStalkGeo,
+    wheatHeadGeo,
+    boulderGeo,
+    brickGeo,
+    fencePostGeo,
+    fenceRailGeo,
     materials,
     dispose: () => {
       baseGeo.dispose();
       rimGeo.dispose();
       tokenGeo.dispose();
+      tokenFaceGeo.dispose();
+      treeTrunkGeo.dispose();
+      treeConeGeo.dispose();
+      fernGeo.dispose();
+      flowerGeo.dispose();
+      wheatStalkGeo.dispose();
+      wheatHeadGeo.dispose();
+      boulderGeo.dispose();
+      brickGeo.dispose();
+      fencePostGeo.dispose();
+      fenceRailGeo.dispose();
       Object.values(terrainTop).forEach((m) => m.dispose());
       materials.rimEarth.dispose();
       materials.bark.dispose();
       materials.pineLeaves.forEach((m) => m.dispose());
+      materials.fernGreen.dispose();
       materials.rockGrey.dispose();
       materials.rockDark.dispose();
       materials.snowCap.dispose();
@@ -180,7 +264,9 @@ export function createTerrainAssets(textures: ProceduralTextureSet): TerrainAsse
       materials.clayRed.dispose();
       materials.clayBrick.dispose();
       materials.wheatGold.dispose();
+      materials.wheatEar.dispose();
       materials.wheatBarn.dispose();
+      materials.windmillSail.dispose();
       materials.sheepWool.dispose();
       materials.sheepFace.dispose();
       materials.fenceWood.dispose();
@@ -188,53 +274,62 @@ export function createTerrainAssets(textures: ProceduralTextureSet): TerrainAsse
       materials.flowerWhite.dispose();
       materials.sandDune.dispose();
       materials.cactusGreen.dispose();
+      materials.oasisWater.dispose();
       materials.tokenBrass.dispose();
     },
   };
 }
 
-function addMultiTierPineTree(
+function addMultiSpeciesPineTree(
   parent: THREE.Group,
   x: number,
   y: number,
   z: number,
   scale: number,
+  species: 'spruce' | 'cedar',
   assets: TerrainAssets,
   rng: () => number,
-) {
+): THREE.Group {
   const tree = new THREE.Group();
   tree.position.set(x, y, z);
   tree.scale.setScalar(scale);
 
-  // Tapered trunk
-  const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.032, 0.055, 0.24, 7),
-    assets.materials.bark,
-  );
-  trunk.position.y = 0.12;
+  // Tapered bark trunk + flared root buttresses
+  const trunk = new THREE.Mesh(assets.treeTrunkGeo, assets.materials.bark);
+  trunk.position.y = 0.13;
   trunk.castShadow = true;
   tree.add(trunk);
 
-  // 4 layered irregular scalloped foliage tiers (not single cones!)
   const leafMat =
     assets.materials.pineLeaves[Math.floor(rng() * assets.materials.pineLeaves.length)];
-  const tiers = [
-    { r: 0.23, h: 0.24, y: 0.25 },
-    { r: 0.19, h: 0.22, y: 0.39 },
-    { r: 0.145, h: 0.2, y: 0.52 },
-    { r: 0.095, h: 0.18, y: 0.64 },
-  ];
+
+  const tiers =
+    species === 'spruce'
+      ? [
+          { r: 0.95, h: 0.95, y: 0.25 },
+          { r: 0.8, h: 0.92, y: 0.39 },
+          { r: 0.62, h: 0.86, y: 0.52 },
+          { r: 0.42, h: 0.78, y: 0.65 },
+        ]
+      : [
+          { r: 1.15, h: 0.75, y: 0.24 },
+          { r: 0.92, h: 0.72, y: 0.36 },
+          { r: 0.65, h: 0.68, y: 0.48 },
+        ];
+
   tiers.forEach((t, idx) => {
-    const geo = new THREE.ConeGeometry(t.r, t.h, 7);
-    const tier = new THREE.Mesh(geo, leafMat);
-    tier.position.y = t.y;
-    tier.rotation.y = idx * 0.5 + rng() * 0.6;
+    const tier = new THREE.Mesh(assets.treeConeGeo, leafMat);
+    tier.scale.set(t.r, t.h, t.r * (0.9 + rng() * 0.18));
+    tier.position.set((rng() - 0.5) * 0.025, t.y, (rng() - 0.5) * 0.025);
+    tier.rotation.y = idx * 0.65 + rng() * 0.7;
     tier.castShadow = true;
     tier.receiveShadow = true;
     tree.add(tier);
   });
 
+  tree.userData.swayPhase = rng() * Math.PI * 2;
   parent.add(tree);
+  return tree;
 }
 
 function addGrazingSheep(
@@ -249,33 +344,37 @@ function addGrazingSheep(
   sheep.position.set(x, y, z);
   sheep.rotation.y = yaw;
 
-  // Woolly multi-tuft body
   const body = new THREE.Mesh(
     new THREE.DodecahedronGeometry(0.11, 0),
     assets.materials.sheepWool,
   );
-  body.scale.set(1.3, 0.95, 0.95);
+  body.scale.set(1.32, 0.96, 0.96);
   body.position.y = 0.12;
   body.castShadow = true;
   sheep.add(body);
 
   const tuft = new THREE.Mesh(
-    new THREE.DodecahedronGeometry(0.08, 0),
+    new THREE.DodecahedronGeometry(0.082, 0),
     assets.materials.sheepWool,
   );
   tuft.position.set(-0.04, 0.16, 0.02);
   sheep.add(tuft);
 
-  // Head + ears
   const head = new THREE.Mesh(
-    new THREE.BoxGeometry(0.08, 0.08, 0.08),
+    new THREE.BoxGeometry(0.082, 0.078, 0.078),
     assets.materials.sheepFace,
   );
   head.position.set(0.13, 0.15, 0);
-  head.rotation.z = -0.25;
+  head.rotation.z = -0.28;
   sheep.add(head);
 
-  // 4 little legs
+  const earGeo = new THREE.BoxGeometry(0.02, 0.02, 0.04);
+  for (const ez of [-0.045, 0.045]) {
+    const ear = new THREE.Mesh(earGeo, assets.materials.sheepFace);
+    ear.position.set(0.12, 0.175, ez);
+    sheep.add(ear);
+  }
+
   const legGeo = new THREE.CylinderGeometry(0.014, 0.012, 0.09, 5);
   for (const [lx, lz] of [
     [-0.07, -0.05],
@@ -305,12 +404,12 @@ function addMountainPeak(
   peak.position.set(x, y, z);
 
   // Sculpted jagged crag by displacing cone vertices radially
-  const cragGeo = new THREE.ConeGeometry(radius, height, 7, 3);
+  const cragGeo = new THREE.ConeGeometry(radius, height, 7, 4);
   const pos = cragGeo.attributes.position;
   for (let i = 0; i < pos.count; i++) {
     const vy = pos.getY(i);
     if (vy < height * 0.45 && vy > -height * 0.45) {
-      const n = 0.8 + rng() * 0.4;
+      const n = 0.76 + rng() * 0.46;
       pos.setX(i, pos.getX(i) * n);
       pos.setZ(i, pos.getZ(i) * n);
     }
@@ -319,17 +418,16 @@ function addMountainPeak(
 
   const crag = new THREE.Mesh(
     cragGeo,
-    rng() > 0.4 ? assets.materials.rockGrey : assets.materials.rockDark,
+    rng() > 0.35 ? assets.materials.rockGrey : assets.materials.rockDark,
   );
   crag.position.y = height * 0.45;
   crag.castShadow = true;
   crag.receiveShadow = true;
   peak.add(crag);
 
-  // Crisp snow cap on taller peaks
   if (height > 0.62) {
     const cap = new THREE.Mesh(
-      new THREE.ConeGeometry(radius * 0.42, height * 0.36, 7),
+      new THREE.ConeGeometry(radius * 0.43, height * 0.36, 7),
       assets.materials.snowCap,
     );
     cap.position.y = height * 0.77;
@@ -337,12 +435,11 @@ function addMountainPeak(
     peak.add(cap);
   }
 
-  // Secondary shoulder buttress
   const shoulder = new THREE.Mesh(
-    new THREE.DodecahedronGeometry(radius * 0.45, 0),
+    new THREE.DodecahedronGeometry(radius * 0.44, 0),
     assets.materials.rockDark,
   );
-  shoulder.scale.set(1.2, 0.85, 0.9);
+  shoulder.scale.set(1.25, 0.85, 0.92);
   shoulder.position.set(radius * 0.42, height * 0.14, (rng() - 0.5) * 0.25);
   shoulder.castShadow = true;
   peak.add(shoulder);
@@ -350,18 +447,22 @@ function addMountainPeak(
   parent.add(peak);
 }
 
+const _dummyObj = new THREE.Object3D();
+
 /**
- * Builds a complete, handcrafted 3D hexagonal terrain tile Group with biome props
- * and brass/parchment number token disc.
+ * Builds a complete, handcrafted 3D hexagonal terrain tile Group with instanced
+ * biome flora, animated tree/windmill refs, and brass/parchment number token disc.
  */
 export function buildHexTileGroup(
   hex: HexTile,
   assets: TerrainAssets,
   textures: ProceduralTextureSet,
-): THREE.Group {
+): TerrainTileBuildResult {
   const group = new THREE.Group();
   group.position.set(hex.x, 0, hex.z);
   const rng = makeSeededRng(`${hex.id}_${hex.terrain}`);
+  const swayTrees: THREE.Object3D[] = [];
+  const windmills: THREE.Object3D[] = [];
 
   // 1. Stone/earth beveled rim plinth
   const rim = new THREE.Mesh(assets.rimGeo, assets.materials.rimEarth);
@@ -378,53 +479,78 @@ export function buildHexTileGroup(
 
   const surfaceY = 0.245;
 
-  // Ring positions around central clearing so number token remains clearly legible
-  const ringAngles = [0, 1, 2, 3, 4, 5, 6, 7].map(
-    (i) => (i / 8) * Math.PI * 2 + rng() * 0.35,
+  const ringAngles = [0, 1, 2, 3, 4, 5, 6, 7, 8].map(
+    (i) => (i / 9) * Math.PI * 2 + rng() * 0.28,
   );
 
   if (hex.terrain === 'forest') {
     ringAngles.forEach((ang, i) => {
-      const dist = i % 2 === 0 ? 0.84 + rng() * 0.24 : 0.64 + rng() * 0.18;
+      const dist = i % 2 === 0 ? 0.86 + rng() * 0.22 : 0.66 + rng() * 0.18;
       const tx = Math.cos(ang) * dist;
       const tz = Math.sin(ang) * dist;
-      addMultiTierPineTree(
+      const tree = addMultiSpeciesPineTree(
         group,
         tx,
         surfaceY,
         tz,
-        0.78 + rng() * 0.44,
+        0.74 + rng() * 0.46,
+        i % 3 === 0 ? 'cedar' : 'spruce',
         assets,
         rng,
       );
+      swayTrees.push(tree);
     });
-    // Mossy forest boulders
+
+    // Fallen moss-covered timber log
+    const log = new THREE.Mesh(assets.treeTrunkGeo, assets.materials.bark);
+    log.rotation.z = Math.PI / 2;
+    log.rotation.y = rng() * Math.PI;
+    log.scale.set(1.2, 1.4, 1.2);
+    log.position.set(-0.52, surfaceY + 0.04, 0.56);
+    log.castShadow = true;
+    group.add(log);
+
+    // Instanced forest undergrowth ferns + boulders
+    const fernCount = 16;
+    const ferns = new THREE.InstancedMesh(
+      assets.fernGeo,
+      assets.materials.fernGreen,
+      fernCount,
+    );
+    for (let i = 0; i < fernCount; i++) {
+      const ang = rng() * Math.PI * 2;
+      const d = 0.54 + rng() * 0.65;
+      _dummyObj.position.set(Math.cos(ang) * d, surfaceY + 0.04, Math.sin(ang) * d);
+      _dummyObj.rotation.set(0, rng() * Math.PI * 2, 0);
+      _dummyObj.scale.setScalar(0.8 + rng() * 0.65);
+      _dummyObj.updateMatrix();
+      ferns.setMatrixAt(i, _dummyObj.matrix);
+    }
+    ferns.instanceMatrix.needsUpdate = true;
+    group.add(ferns);
+
     for (let i = 0; i < 4; i++) {
       const ang = rng() * Math.PI * 2;
-      const d = 0.6 + rng() * 0.55;
-      const rock = new THREE.Mesh(
-        new THREE.DodecahedronGeometry(0.08 + rng() * 0.05, 0),
-        assets.materials.rockGrey,
-      );
+      const d = 0.58 + rng() * 0.55;
+      const rock = new THREE.Mesh(assets.boulderGeo, assets.materials.rockGrey);
       rock.position.set(Math.cos(ang) * d, surfaceY + 0.03, Math.sin(ang) * d);
-      rock.scale.y = 0.65;
+      rock.scale.set(0.8 + rng() * 0.5, 0.55, 0.8 + rng() * 0.5);
       group.add(rock);
     }
   } else if (hex.terrain === 'pasture') {
-    // Rolling grass knolls
     for (let i = 0; i < 3; i++) {
       const ang = (i / 3) * Math.PI * 2 + 0.4;
       const knoll = new THREE.Mesh(
         new THREE.SphereGeometry(0.55, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
         assets.materials.terrainTop.pasture,
       );
-      knoll.scale.set(1.1, 0.25, 0.9);
+      knoll.scale.set(1.12, 0.25, 0.92);
       knoll.position.set(Math.cos(ang) * 0.68, surfaceY - 0.02, Math.sin(ang) * 0.68);
       knoll.receiveShadow = true;
       group.add(knoll);
     }
-    // 3 grazing sheep
-    [0.5, 2.5, 4.4].forEach((ang) => {
+
+    [0.45, 2.35, 4.35].forEach((ang) => {
       addGrazingSheep(
         group,
         Math.cos(ang) * 0.8,
@@ -434,87 +560,143 @@ export function buildHexTileGroup(
         assets,
       );
     });
-    // Split-rail wooden fence segment
+
+    // Split-rail pasture fence
     const fence = new THREE.Group();
     fence.position.set(-0.72, surfaceY, 0.55);
     fence.rotation.y = 0.6;
-    const postGeo = new THREE.BoxGeometry(0.035, 0.14, 0.035);
     for (const fx of [-0.25, 0, 0.25]) {
-      const post = new THREE.Mesh(postGeo, assets.materials.fenceWood);
+      const post = new THREE.Mesh(assets.fencePostGeo, assets.materials.fenceWood);
       post.position.set(fx, 0.07, 0);
       fence.add(post);
     }
-    const railGeo = new THREE.BoxGeometry(0.54, 0.024, 0.02);
     for (const ry of [0.05, 0.11]) {
-      const rail = new THREE.Mesh(railGeo, assets.materials.fenceWood);
+      const rail = new THREE.Mesh(assets.fenceRailGeo, assets.materials.fenceWood);
       rail.position.set(0, ry, 0);
       fence.add(rail);
     }
     group.add(fence);
 
-    // Wildflower dots
-    const flowerGeo = new THREE.SphereGeometry(0.03, 6, 5);
-    for (let i = 0; i < 10; i++) {
-      const ang = rng() * Math.PI * 2;
-      const d = 0.52 + rng() * 0.65;
-      const fl = new THREE.Mesh(
-        flowerGeo,
-        i % 2 === 0 ? assets.materials.flowerYellow : assets.materials.flowerWhite,
-      );
-      fl.position.set(Math.cos(ang) * d, surfaceY + 0.02, Math.sin(ang) * d);
-      group.add(fl);
-    }
-  } else if (hex.terrain === 'fields') {
-    // Harvest crop strips + dense golden wheat sheaves
-    const stalkGeo = new THREE.CylinderGeometry(0.02, 0.03, 0.26, 5);
-    const headGeo = new THREE.ConeGeometry(0.048, 0.13, 5);
-    for (let row = 0; row < 7; row++) {
-      const ang = (row / 7) * Math.PI * 2;
-      const cx = Math.cos(ang) * 0.82;
-      const cz = Math.sin(ang) * 0.82;
-      for (let s = 0; s < 6; s++) {
-        const sx = cx + (rng() - 0.5) * 0.32;
-        const sz = cz + (rng() - 0.5) * 0.32;
-        const sheaf = new THREE.Group();
-        sheaf.position.set(sx, surfaceY, sz);
-        sheaf.rotation.z = (rng() - 0.5) * 0.18;
-        const stalk = new THREE.Mesh(stalkGeo, assets.materials.wheatGold);
-        stalk.position.y = 0.13;
-        stalk.castShadow = true;
-        const head = new THREE.Mesh(headGeo, assets.materials.wheatGold);
-        head.position.y = 0.27;
-        head.castShadow = true;
-        sheaf.add(stalk, head);
-        group.add(sheaf);
+    // Instanced meadow wildflowers (yellow & white)
+    const countPerColor = 12;
+    const yellowFlowers = new THREE.InstancedMesh(
+      assets.flowerGeo,
+      assets.materials.flowerYellow,
+      countPerColor,
+    );
+    const whiteFlowers = new THREE.InstancedMesh(
+      assets.flowerGeo,
+      assets.materials.flowerWhite,
+      countPerColor,
+    );
+    for (let i = 0; i < countPerColor; i++) {
+      for (const mesh of [yellowFlowers, whiteFlowers]) {
+        const ang = rng() * Math.PI * 2;
+        const d = 0.5 + rng() * 0.68;
+        _dummyObj.position.set(Math.cos(ang) * d, surfaceY + 0.025, Math.sin(ang) * d);
+        _dummyObj.rotation.set(0, 0, 0);
+        _dummyObj.scale.setScalar(0.85 + rng() * 0.5);
+        _dummyObj.updateMatrix();
+        mesh.setMatrixAt(i, _dummyObj.matrix);
       }
     }
-    // Small red farm granary barn
+    yellowFlowers.instanceMatrix.needsUpdate = true;
+    whiteFlowers.instanceMatrix.needsUpdate = true;
+    group.add(yellowFlowers, whiteFlowers);
+  } else if (hex.terrain === 'fields') {
+    // High-density instanced golden wheat stalks & ears
+    const stalkCount = 48;
+    const stalks = new THREE.InstancedMesh(
+      assets.wheatStalkGeo,
+      assets.materials.wheatGold,
+      stalkCount,
+    );
+    const heads = new THREE.InstancedMesh(
+      assets.wheatHeadGeo,
+      assets.materials.wheatEar,
+      stalkCount,
+    );
+    stalks.castShadow = true;
+    heads.castShadow = true;
+
+    let idx = 0;
+    for (let row = 0; row < 8; row++) {
+      const ang = (row / 8) * Math.PI * 2;
+      const cx = Math.cos(ang) * 0.84;
+      const cz = Math.sin(ang) * 0.84;
+      for (let s = 0; s < 6; s++) {
+        const sx = cx + (rng() - 0.5) * 0.34;
+        const sz = cz + (rng() - 0.5) * 0.34;
+        const tiltX = (rng() - 0.5) * 0.2;
+        const tiltZ = (rng() - 0.5) * 0.2;
+
+        _dummyObj.position.set(sx, surfaceY + 0.12, sz);
+        _dummyObj.rotation.set(tiltX, rng() * Math.PI, tiltZ);
+        _dummyObj.scale.setScalar(0.85 + rng() * 0.3);
+        _dummyObj.updateMatrix();
+        stalks.setMatrixAt(idx, _dummyObj.matrix);
+
+        _dummyObj.position.set(sx - tiltZ * 0.12, surfaceY + 0.25, sz + tiltX * 0.12);
+        _dummyObj.updateMatrix();
+        heads.setMatrixAt(idx, _dummyObj.matrix);
+        idx++;
+      }
+    }
+    stalks.instanceMatrix.needsUpdate = true;
+    heads.instanceMatrix.needsUpdate = true;
+    group.add(stalks, heads);
+
+    // Miniature red farm granary barn + stone-base windmill with rotating sails
     const barn = new THREE.Group();
-    barn.position.set(0.75, surfaceY, -0.58);
+    barn.position.set(0.75, surfaceY, -0.56);
     barn.rotation.y = -0.5;
     const bBody = new THREE.Mesh(
-      new THREE.BoxGeometry(0.24, 0.16, 0.2),
+      new THREE.BoxGeometry(0.22, 0.15, 0.18),
       assets.materials.wheatBarn,
     );
-    bBody.position.y = 0.08;
+    bBody.position.y = 0.075;
     bBody.castShadow = true;
     const bRoof = new THREE.Mesh(
-      new THREE.ConeGeometry(0.18, 0.13, 4),
+      new THREE.ConeGeometry(0.165, 0.12, 4),
       assets.materials.fenceWood,
     );
     bRoof.rotation.y = Math.PI / 4;
-    bRoof.position.y = 0.22;
+    bRoof.position.y = 0.21;
     bRoof.castShadow = true;
     barn.add(bBody, bRoof);
     group.add(barn);
+
+    const mill = new THREE.Group();
+    mill.position.set(-0.74, surfaceY, 0.52);
+    mill.rotation.y = 0.7;
+    const millTower = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.065, 0.1, 0.26, 8),
+      assets.materials.rockGrey,
+    );
+    millTower.position.y = 0.13;
+    millTower.castShadow = true;
+    const millRoof = new THREE.Mesh(
+      new THREE.ConeGeometry(0.08, 0.09, 8),
+      assets.materials.wheatBarn,
+    );
+    millRoof.position.y = 0.3;
+    const bladesHub = new THREE.Group();
+    bladesHub.position.set(0, 0.24, 0.08);
+    const bladeGeo = new THREE.BoxGeometry(0.036, 0.28, 0.01);
+    const b1 = new THREE.Mesh(bladeGeo, assets.materials.windmillSail);
+    const b2 = new THREE.Mesh(bladeGeo, assets.materials.windmillSail);
+    b2.rotation.z = Math.PI / 2;
+    bladesHub.add(b1, b2);
+    mill.add(millTower, millRoof, bladesHub);
+    group.add(mill);
+    windmills.push(bladesHub);
   } else if (hex.terrain === 'hills') {
-    // Stepped reddish-brown clay ridges & quarry bricks
     for (let i = 0; i < 5; i++) {
       const ang = (i / 5) * Math.PI * 2 + 0.2;
       const dist = 0.78 + rng() * 0.2;
-      const h = 0.16 + rng() * 0.22;
+      const h = 0.16 + rng() * 0.24;
       const slab = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.26, 0.36, h, 6),
+        new THREE.CylinderGeometry(0.25, 0.37, h, 6),
         assets.materials.clayRed,
       );
       slab.position.set(Math.cos(ang) * dist, surfaceY + h * 0.45, Math.sin(ang) * dist);
@@ -523,26 +705,25 @@ export function buildHexTileGroup(
       slab.receiveShadow = true;
       group.add(slab);
     }
-    // Stacked clay quarry bricks
-    const brickGeo = new THREE.BoxGeometry(0.11, 0.055, 0.065);
-    for (let b = 0; b < 5; b++) {
-      const brick = new THREE.Mesh(brickGeo, assets.materials.clayBrick);
+
+    // Stacked kiln-fired clay quarry bricks
+    for (let b = 0; b < 6; b++) {
+      const brick = new THREE.Mesh(assets.brickGeo, assets.materials.clayBrick);
       brick.position.set(
-        -0.75 + (b % 2) * 0.12,
+        -0.75 + (b % 2) * 0.125,
         surfaceY + 0.03 + Math.floor(b / 2) * 0.058,
         0.52,
       );
-      brick.rotation.y = 0.4 + (rng() - 0.5) * 0.2;
+      brick.rotation.y = 0.4 + (rng() - 0.5) * 0.18;
       brick.castShadow = true;
       group.add(brick);
     }
   } else if (hex.terrain === 'mountains') {
-    // Dramatic multi-peak alpine range around perimeter
     const peakConfigs = [
-      { ang: 0.3, d: 0.78, r: 0.48, h: 0.92 },
+      { ang: 0.3, d: 0.78, r: 0.48, h: 0.94 },
       { ang: 1.5, d: 0.74, r: 0.42, h: 0.78 },
       { ang: 2.7, d: 0.82, r: 0.38, h: 0.66 },
-      { ang: 3.9, d: 0.76, r: 0.46, h: 0.86 },
+      { ang: 3.9, d: 0.76, r: 0.46, h: 0.88 },
       { ang: 5.1, d: 0.8, r: 0.36, h: 0.58 },
     ];
     for (const cfg of peakConfigs) {
@@ -557,7 +738,6 @@ export function buildHexTileGroup(
         rng,
       );
     }
-    // Exposed metallic ore boulders
     for (let i = 0; i < 4; i++) {
       const ang = rng() * Math.PI * 2;
       const ore = new THREE.Mesh(
@@ -569,20 +749,32 @@ export function buildHexTileGroup(
       group.add(ore);
     }
   } else if (hex.terrain === 'desert') {
-    // Sinuous wind-swept sand dunes + sandstone outcrop + desert cacti
     for (let i = 0; i < 3; i++) {
       const ang = (i / 3) * Math.PI * 2 + 0.6;
       const dune = new THREE.Mesh(
         new THREE.SphereGeometry(0.62, 12, 7, 0, Math.PI * 2, 0, Math.PI / 2),
         assets.materials.sandDune,
       );
-      dune.scale.set(1.4, 0.24, 0.7);
+      dune.scale.set(1.42, 0.25, 0.72);
       dune.rotation.y = ang + 1.1;
       dune.position.set(Math.cos(ang) * 0.72, surfaceY - 0.03, Math.sin(ang) * 0.72);
       dune.receiveShadow = true;
       group.add(dune);
     }
-    // Small desert saguaro
+
+    // Small shimmering desert oasis pool on one flank
+    const oasisRim = new THREE.Mesh(
+      new THREE.TorusGeometry(0.22, 0.045, 6, 16).rotateX(Math.PI / 2),
+      assets.materials.rockGrey,
+    );
+    oasisRim.position.set(-0.62, surfaceY + 0.02, -0.58);
+    const oasisPool = new THREE.Mesh(
+      new THREE.CircleGeometry(0.21, 16).rotateX(-Math.PI / 2),
+      assets.materials.oasisWater,
+    );
+    oasisPool.position.set(-0.62, surfaceY + 0.025, -0.58);
+    group.add(oasisRim, oasisPool);
+
     for (const [cx, cz] of [
       [0.85, -0.52],
       [-0.78, 0.62],
@@ -605,12 +797,12 @@ export function buildHexTileGroup(
     }
   }
 
-  // 3. Number token disc (brass rim + parchment face)
+  // 3. Number token disc (brass rim + engraved parchment face)
   if (hex.numberToken !== null) {
     const tokenFaceTex = textures.numberTokens.get(hex.numberToken);
     if (tokenFaceTex) {
       const tokenGroup = new THREE.Group();
-      tokenGroup.position.set(0, surfaceY + 0.035, 0);
+      tokenGroup.position.set(0, surfaceY + 0.036, 0);
 
       const brassDisc = new THREE.Mesh(assets.tokenGeo, assets.materials.tokenBrass);
       brassDisc.castShadow = true;
@@ -619,13 +811,10 @@ export function buildHexTileGroup(
 
       const faceMat = new THREE.MeshStandardMaterial({
         map: tokenFaceTex,
-        roughness: 0.48,
-        metalness: 0.05,
+        roughness: 0.45,
+        metalness: 0.04,
       });
-      const faceDisc = new THREE.Mesh(
-        new THREE.CircleGeometry(0.39, 28),
-        faceMat,
-      );
+      const faceDisc = new THREE.Mesh(assets.tokenFaceGeo, faceMat);
       faceDisc.rotation.x = -Math.PI / 2;
       faceDisc.position.y = 0.038;
       tokenGroup.add(faceDisc);
@@ -634,42 +823,102 @@ export function buildHexTileGroup(
     }
   }
 
-  return group;
+  return { group, swayTrees, windmills };
 }
 
 /**
- * Builds the carved mahogany tabletop frame + ocean basin with animated PBR waves.
+ * Builds a miniature roaming coastal merchant schooner for the sea channel.
+ */
+export function createCoastalShipMesh(textures: ProceduralTextureSet): THREE.Group {
+  const ship = new THREE.Group();
+  const hullMat = new THREE.MeshStandardMaterial({
+    color: 0x5c3a22,
+    normalMap: textures.woodMahoganyNormal,
+    normalScale: new THREE.Vector2(0.5, 0.5),
+    roughness: 0.7,
+  });
+  const sailMat = new THREE.MeshStandardMaterial({
+    color: 0xf6edd9,
+    roughness: 0.78,
+    side: THREE.DoubleSide,
+  });
+
+  const hullShape = new THREE.Shape();
+  hullShape.moveTo(0, 0.44);
+  hullShape.quadraticCurveTo(0.18, 0.15, 0.14, -0.34);
+  hullShape.lineTo(-0.14, -0.34);
+  hullShape.quadraticCurveTo(-0.18, 0.15, 0, 0.44);
+  const hullGeo = new THREE.ExtrudeGeometry(hullShape, {
+    depth: 0.16,
+    bevelEnabled: true,
+    bevelThickness: 0.02,
+    bevelSize: 0.02,
+    bevelSegments: 2,
+  });
+  hullGeo.rotateX(Math.PI / 2);
+  const hull = new THREE.Mesh(hullGeo, hullMat);
+  hull.position.y = 0.08;
+  hull.castShadow = true;
+  ship.add(hull);
+
+  const mast = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.018, 0.024, 0.74, 8),
+    hullMat,
+  );
+  mast.position.y = 0.42;
+  mast.castShadow = true;
+  ship.add(mast);
+
+  const mainSail = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.48), sailMat);
+  mainSail.position.set(0, 0.46, 0.04);
+  mainSail.castShadow = true;
+  ship.add(mainSail);
+
+  const jibSail = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.34), sailMat);
+  jibSail.rotation.y = Math.PI / 2;
+  jibSail.position.set(0, 0.34, 0.25);
+  ship.add(jibSail);
+
+  return ship;
+}
+
+/**
+ * Builds the carved mahogany tabletop, brass brackets, walled felt dice tray,
+ * sea stacks, and multi-frequency animated PBR ocean basin.
  */
 export function createTabletopAndOcean(textures: ProceduralTextureSet) {
   const group = new THREE.Group();
 
-  // Outer studio wooden table surface
+  // Outer studio wooden table surface (planar box avoids radial cylinder cap UV distortion)
   const tableMat = new THREE.MeshStandardMaterial({
+    color: 0xa68d7a,
     map: textures.woodMahogany,
-    bumpMap: textures.woodGrainBump,
-    bumpScale: 0.02,
-    roughness: 0.56,
-    metalness: 0.08,
+    normalMap: textures.woodMahoganyNormal,
+    normalScale: new THREE.Vector2(0.24, 0.24),
+    roughnessMap: textures.woodRoughness,
+    roughness: 0.86,
+    metalness: 0.02,
+    envMapIntensity: 0.32,
   });
-  const tableTop = new THREE.Mesh(new THREE.CylinderGeometry(28, 28, 0.6, 48), tableMat);
+  const tableTop = new THREE.Mesh(new THREE.BoxGeometry(58, 0.6, 58), tableMat);
   tableTop.position.y = -0.68;
   tableTop.receiveShadow = true;
   group.add(tableTop);
 
-  // Carved octagonal mahogany board frame cradling the island ocean
+  // Carved hexagonal mahogany board frame cradling the island ocean
   const frameMat = new THREE.MeshStandardMaterial({
     map: textures.woodMahogany,
-    bumpMap: textures.woodGrainBump,
-    bumpScale: 0.03,
-    color: 0xffffff,
-    roughness: 0.42,
+    normalMap: textures.woodMahoganyNormal,
+    normalScale: new THREE.Vector2(0.8, 0.8),
+    roughnessMap: textures.woodRoughness,
+    roughness: 0.44,
     metalness: 0.12,
   });
 
   const brassMat = new THREE.MeshStandardMaterial({
-    color: 0xc99c49,
-    roughness: 0.25,
-    metalness: 0.86,
+    color: 0xd1a450,
+    roughness: 0.24,
+    metalness: 0.88,
   });
 
   const outerRadius = 11.85;
@@ -710,8 +959,8 @@ export function createTabletopAndOcean(textures: ProceduralTextureSet) {
   boardFrame.receiveShadow = true;
   group.add(boardFrame);
 
-  // Brass corner inlays on the 6 frame corners
-  const bracketGeo = new THREE.CylinderGeometry(0.2, 0.24, 0.14, 6);
+  // Brass corner medallions + thin inner brass trim ring
+  const bracketGeo = new THREE.CylinderGeometry(0.21, 0.25, 0.14, 6);
   for (let i = 0; i < 6; i++) {
     const a = (Math.PI / 180) * (60 * i - 30);
     const corner = new THREE.Mesh(bracketGeo, brassMat);
@@ -724,37 +973,104 @@ export function createTabletopAndOcean(textures: ProceduralTextureSet) {
     group.add(corner);
   }
 
-  // Dedicated felt-lined wooden dice tray resting on the right mahogany ledge
-  const trayBase = new THREE.Mesh(
-    new THREE.BoxGeometry(2.1, 0.14, 1.8),
-    frameMat,
-  );
-  trayBase.position.set(9.1, 0.36, 4.95);
-  trayBase.rotation.y = -0.45;
+  // Dedicated walled felt-lined wooden dice tray resting cleanly along the right mahogany rail
+  const trayGroup = new THREE.Group();
+  trayGroup.position.set(9.3, 0.36, 2.35);
+  trayGroup.rotation.y = -0.22;
+
+  const trayBase = new THREE.Mesh(new THREE.BoxGeometry(2.14, 0.14, 1.84), frameMat);
   trayBase.castShadow = true;
   trayBase.receiveShadow = true;
-  group.add(trayBase);
+  trayGroup.add(trayBase);
 
   const feltMat = new THREE.MeshStandardMaterial({
-    color: 0x1b3a2c,
-    roughness: 0.94,
+    color: 0x183829,
+    roughness: 0.95,
     metalness: 0.02,
   });
-  const trayFelt = new THREE.Mesh(new THREE.BoxGeometry(1.86, 0.04, 1.56), feltMat);
-  trayFelt.position.set(9.1, 0.44, 4.95);
-  trayFelt.rotation.y = -0.45;
+  const trayFelt = new THREE.Mesh(new THREE.BoxGeometry(1.88, 0.04, 1.58), feltMat);
+  trayFelt.position.y = 0.08;
   trayFelt.receiveShadow = true;
-  group.add(trayFelt);
+  trayGroup.add(trayFelt);
 
-  // Animated Ocean Basin inside the mahogany frame
-  const oceanGeo = new THREE.CylinderGeometry(10.12, 10.12, 0.16, 48, 24);
+  // Raised wooden dice tray walls
+  const wallFB = new THREE.BoxGeometry(2.14, 0.16, 0.13);
+  const wallLR = new THREE.BoxGeometry(0.13, 0.16, 1.84);
+  for (const wz of [-0.855, 0.855]) {
+    const w = new THREE.Mesh(wallFB, frameMat);
+    w.position.set(0, 0.14, wz);
+    w.castShadow = true;
+    trayGroup.add(w);
+  }
+  for (const wx of [-1.005, 1.005]) {
+    const w = new THREE.Mesh(wallLR, frameMat);
+    w.position.set(wx, 0.14, 0);
+    w.castShadow = true;
+    trayGroup.add(w);
+  }
+  group.add(trayGroup);
+
+  // Sculpted coastal basalt sea-stack clusters with surf halos
+  const reefMat = new THREE.MeshStandardMaterial({
+    color: 0x525a63,
+    roughness: 0.88,
+    flatShading: true,
+  });
+  const reefFoamMat = new THREE.MeshBasicMaterial({
+    color: 0xd8eef7,
+    transparent: true,
+    opacity: 0.36,
+    side: THREE.DoubleSide,
+  });
+  const stackGeo = new THREE.ConeGeometry(0.18, 0.38, 6);
+  const foamRingGeo = new THREE.RingGeometry(0.22, 0.38, 16);
+  foamRingGeo.rotateX(-Math.PI / 2);
+
+  for (const [rx, rz, s] of [
+    [-7.6, -4.4, 1.05],
+    [7.8, -3.9, 0.95],
+    [-6.6, 5.9, 1.0],
+    [4.4, -7.8, 0.9],
+  ] as const) {
+    const cluster = new THREE.Group();
+    cluster.position.set(rx, 0.02, rz);
+    cluster.rotation.y = rx * 0.6;
+
+    const mainStack = new THREE.Mesh(stackGeo, reefMat);
+    mainStack.position.set(0, 0.14 * s, 0);
+    mainStack.scale.set(s * 1.15, s, s * 1.05);
+    mainStack.castShadow = true;
+    cluster.add(mainStack);
+
+    const sideStack = new THREE.Mesh(stackGeo, reefMat);
+    sideStack.position.set(0.18 * s, 0.07 * s, 0.1 * s);
+    sideStack.scale.set(s * 0.72, s * 0.58, s * 0.72);
+    sideStack.rotation.y = 0.8;
+    cluster.add(sideStack);
+
+    const lowRock = new THREE.Mesh(stackGeo, reefMat);
+    lowRock.position.set(-0.15 * s, 0.05 * s, -0.1 * s);
+    lowRock.scale.set(s * 0.65, s * 0.45, s * 0.68);
+    cluster.add(lowRock);
+
+    const foam = new THREE.Mesh(foamRingGeo, reefFoamMat);
+    foam.position.y = 0.025;
+    foam.scale.setScalar(s * 1.15);
+    cluster.add(foam);
+
+    group.add(cluster);
+  }
+
+  // Animated Deep Sapphire-to-Lagoon Ocean Basin inside the mahogany frame
+  const oceanGeo = new THREE.CylinderGeometry(10.12, 10.12, 0.16, 54, 26);
   const oceanUniforms = { uTime: { value: 0 } };
   const oceanMat = new THREE.MeshStandardMaterial({
     color: 0x165b7d,
-    roughness: 0.22,
-    metalness: 0.15,
-    bumpMap: textures.oceanFoamBump,
-    bumpScale: 0.025,
+    roughness: 0.38,
+    metalness: 0.06,
+    envMapIntensity: 0.42,
+    normalMap: textures.oceanNormal,
+    normalScale: new THREE.Vector2(0.2, 0.2),
   });
 
   oceanMat.onBeforeCompile = (shader) => {
@@ -765,8 +1081,8 @@ export function createTabletopAndOcean(textures: ProceduralTextureSet) {
       '#include <begin_vertex>',
       `
       #include <begin_vertex>
-      float wave = sin(position.x * 1.15 + uTime * 1.6) * 0.032 +
-                   cos(position.z * 1.35 - uTime * 1.25) * 0.026;
+      float wave = sin(position.x * 0.95 + uTime * 1.35) * 0.026 +
+                   cos(position.z * 1.15 - uTime * 1.05) * 0.022;
       transformed.y += wave;
       vWorldPos = position;
       `,
@@ -778,12 +1094,15 @@ export function createTabletopAndOcean(textures: ProceduralTextureSet) {
       `
       #include <color_fragment>
       float distFromCenter = length(vWorldPos.xz);
-      float shoreBand = smoothstep(7.2, 5.2, distFromCenter);
-      float foamRipple = sin(distFromCenter * 5.0 - uTime * 2.2) * 0.5 + 0.5;
-      vec3 shallowTeal = vec3(0.14, 0.49, 0.58);
-      vec3 deepNavy = vec3(0.05, 0.21, 0.34);
-      diffuseColor.rgb = mix(deepNavy, shallowTeal, shoreBand * 0.75);
-      diffuseColor.rgb += vec3(0.28, 0.34, 0.36) * pow(foamRipple, 6.0) * shoreBand * 0.4;
+      float shoreBand = smoothstep(8.2, 5.2, distFromCenter);
+      float organicPhase = sin(vWorldPos.x * 0.85) * 0.6 + cos(vWorldPos.z * 0.92) * 0.6;
+      float foamRipple = sin(distFromCenter * 4.2 - uTime * 1.85 + organicPhase) * 0.5 + 0.5;
+      float shimmer = sin(vWorldPos.x * 1.3 + vWorldPos.z * 0.9 + uTime * 0.9) * 0.5 + 0.5;
+      vec3 shallowTeal = vec3(0.12, 0.44, 0.55);
+      vec3 deepSapphire = vec3(0.05, 0.21, 0.35);
+      diffuseColor.rgb = mix(deepSapphire, shallowTeal, shoreBand * 0.82);
+      diffuseColor.rgb += vec3(0.02, 0.04, 0.05) * shimmer * shoreBand;
+      diffuseColor.rgb += vec3(0.24, 0.32, 0.35) * pow(foamRipple, 8.0) * shoreBand * 0.24;
       `,
     );
   };

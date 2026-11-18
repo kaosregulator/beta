@@ -109,6 +109,8 @@ export function BoardCanvas() {
   const room = useGameStore((s) => s.room);
   const playerId = useGameStore((s) => s.playerId);
   const quality = useGameStore((s) => s.quality);
+  const reducedMotion = useGameStore((s) => s.reducedMotion);
+  const autoCameraFocus = useGameStore((s) => s.autoCameraFocus);
   const placementIntent = useGameStore((s) => s.placementIntent);
   const cameraCommand = useGameStore((s) => s.cameraCommand);
   const dispatchGameAction = useGameStore((s) => s.dispatchGameAction);
@@ -202,6 +204,14 @@ export function BoardCanvas() {
   useEffect(() => {
     controllerRef.current?.setQuality(quality);
   }, [quality]);
+
+  useEffect(() => {
+    controllerRef.current?.setReducedMotion(reducedMotion);
+  }, [reducedMotion]);
+
+  useEffect(() => {
+    controllerRef.current?.setAutoCameraFocus(autoCameraFocus);
+  }, [autoCameraFocus]);
 
   useEffect(() => {
     if (cameraCommand) {

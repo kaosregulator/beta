@@ -3,16 +3,16 @@ import { ResourceIcon } from './ResourceArt';
 
 export function TutorialModal({ onClose }: { onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 pointer-events-auto bg-black/70 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 pointer-events-auto bg-black/75 flex items-center justify-center p-4">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="tutorial-title"
-        className="w-full max-w-2xl max-h-[85vh] overflow-y-auto scroll-thin bg-[#101821] border border-[#d4aa54]/40 rounded-2xl p-6 md:p-8 text-[#f5efe2] shadow-2xl"
+        className="w-full max-w-2xl max-h-[85vh] overflow-y-auto scroll-thin bg-[#101821] border border-[#d4aa54]/45 rounded-2xl p-6 md:p-8 text-[#f5efe2] shadow-2xl"
       >
         <div className="flex items-center justify-between mb-5 pb-3 border-b border-white/10">
           <h2 id="tutorial-title" className="font-display text-2xl font-bold text-[#f7eed7]">
-            Islehold Rules & Controls
+            Islehold Rules & Tabletop Guide
           </h2>
           <button
             type="button"
@@ -45,13 +45,14 @@ export function TutorialModal({ onClose }: { onClose: () => void }) {
               Each player places two starting settlements and roads in snake-draft order
               (first forward, then reverse). Your second settlement immediately harvests 1
               resource from each adjacent land tile. On your turn, roll the 3D dice—every
-              settlement touching a matching number collects 1 resource, and cities collect 2.
+              settlement touching a matching number collects 1 resource, and fortified cities
+              collect 2.
             </p>
           </section>
 
           <section>
             <h3 className="font-display text-base font-bold text-[#f5d88c] mb-2">
-              3. Building Costs
+              3. Building Costs & Harbors
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <div className="bg-[#16212d] border border-white/10 rounded-xl p-3 flex items-center justify-between">
@@ -89,6 +90,10 @@ export function TutorialModal({ onClose }: { onClose: () => void }) {
                 </div>
               </div>
             </div>
+            <p className="text-xs text-[#9fb0c2] mt-2">
+              Settlements built beside coastal harbor piers unlock 3:1 generic or 2:1
+              specialized maritime exchange rates.
+            </p>
           </section>
 
           <section>

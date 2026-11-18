@@ -1,5 +1,5 @@
 import { Award, RotateCcw, Trophy } from 'lucide-react';
-import { FACTION_META } from '../game/types';
+import { FACTION_META, PIECE_LIMITS } from '../game/types';
 import { useGameStore } from '../store/useGameStore';
 
 export function VictoryModal() {
@@ -16,18 +16,18 @@ export function VictoryModal() {
   const meta = FACTION_META[winner.color];
 
   return (
-    <div className="fixed inset-0 z-40 pointer-events-auto bg-black/70 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-40 pointer-events-auto bg-black/75 flex items-center justify-center p-4">
       <div
         role="dialog"
         aria-modal="true"
-        className="w-full max-w-lg bg-[#101821] border border-[#d4aa54]/50 rounded-2xl p-6 md:p-8 text-center shadow-2xl"
+        className="w-full max-w-xl bg-[#101821] border border-[#d4aa54]/50 rounded-2xl p-6 md:p-8 text-center shadow-2xl"
       >
         <div className="w-14 h-14 mx-auto mb-4 rounded-xl bg-[#292114] border border-[#d4aa54]/50 flex items-center justify-center text-[#f5d88c]">
           <Trophy className="w-7 h-7" />
         </div>
 
         <div className="text-xs uppercase tracking-widest text-[#cbb894] mb-1">
-          Sovereign of the Island
+          Sovereign of the Island · Turn {game.turnNumber}
         </div>
         <h2 className="font-display text-3xl font-bold text-[#f7eed7] mb-1">
           {winner.name} Wins
@@ -36,33 +36,41 @@ export function VictoryModal() {
           {meta.label} · {winner.totalVP ?? winner.publicVP} Victory Points
         </div>
 
-        <div className="space-y-2 text-left mb-6">
+        <div className="space-y-2.5 text-left mb-6">
           {[...game.players]
             .sort((a, b) => (b.totalVP ?? b.publicVP) - (a.totalVP ?? a.publicVP))
             .map((p) => {
               const pm = FACTION_META[p.color];
               const vp = p.totalVP ?? p.publicVP;
+              const settlements = PIECE_LIMITS.settlements - p.settlementsRemaining;
+              const cities = PIECE_LIMITS.cities - p.citiesRemaining;
+              const roads = PIECE_LIMITS.roads - p.roadsRemaining;
               return (
                 <div
                   key={p.id}
-                  className="flex items-center justify-between rounded-xl bg-[#16212d] border border-white/10 px-4 py-2.5"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#16212d] border border-white/10 px-4 py-3"
                 >
-                  <div className="flex items-center gap-2.5">
-                    <span
-                      className="w-3.5 h-3.5 rounded-sm"
-                      style={{ backgroundColor: pm.hex }}
-                    />
-                    <span className="text-sm font-semibold text-[#f5efe2]">{p.name}</span>
-                    {p.hasLongestRoad && (
-                      <span className="text-[11px] text-[#f5d88c] flex items-center gap-0.5">
-                        <Award className="w-3 h-3" /> Road
-                      </span>
-                    )}
-                    {p.hasLargestArmy && (
-                      <span className="text-[11px] text-[#f5d88c] flex items-center gap-0.5">
-                        <Award className="w-3 h-3" /> Army
-                      </span>
-                    )}
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="w-3.5 h-3.5 rounded-sm shrink-0"
+                        style={{ backgroundColor: pm.hex }}
+                      />
+                      <span className="text-sm font-semibold text-[#f5efe2]">{p.name}</span>
+                      {p.hasLongestRoad && (
+                        <span className="text-[11px] text-[#f5d88c] flex items-center gap-0.5">
+                          <Award className="w-3 h-3" /> Road
+                        </span>
+                      )}
+                      {p.hasLargestArmy && (
+                        <span className="text-[11px] text-[#f5d88c] flex items-center gap-0.5">
+                          <Award className="w-3 h-3" /> Army
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-[#94a3b8] mt-0.5 font-mono-num">
+                      {cities} Cities · {settlements} Settlements · {roads} Roads
+                    </div>
                   </div>
                   <span className="font-mono-num text-base font-bold text-[#f5d88c]">
                     {vp} VP

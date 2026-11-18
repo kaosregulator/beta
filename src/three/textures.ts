@@ -1,12 +1,17 @@
 import * as THREE from 'three';
-import type { HarborKind, ResourceType, TerrainType } from '../game/types';
+import type { HarborKind, TerrainType } from '../game/types';
 
 export interface ProceduralTextureSet {
   woodMahogany: THREE.CanvasTexture;
-  woodGrainBump: THREE.CanvasTexture;
-  oceanFoamBump: THREE.CanvasTexture;
+  woodMahoganyNormal: THREE.CanvasTexture;
+  woodRoughness: THREE.CanvasTexture;
+  stoneMasonry: THREE.CanvasTexture;
+  stoneMasonryNormal: THREE.CanvasTexture;
+  roofSlateNormal: THREE.CanvasTexture;
+  oceanNormal: THREE.CanvasTexture;
   terrainMaps: Record<TerrainType, THREE.CanvasTexture>;
-  terrainBump: THREE.CanvasTexture;
+  terrainNormal: THREE.CanvasTexture;
+  terrainRoughness: THREE.CanvasTexture;
   numberTokens: Map<number, THREE.CanvasTexture>;
   harborSigns: Map<HarborKind, THREE.CanvasTexture>;
   diceFaces: THREE.CanvasTexture[]; // index 0..5 => faces 1..6
@@ -37,83 +42,296 @@ function configureTexture(
   return tex;
 }
 
-function createWoodTexture(
-  baseHex: string,
-  grainHex: string,
-  highlightHex: string,
+/**
+ * Converts a grayscale height canvas into a tangent-space RGB normal map via Sobel filter.
+ */
+function heightCanvasToNormalTexture(
+  srcCanvas: HTMLCanvasElement,
+  strength: number,
   aniso: number,
-  isColor: boolean,
+  repeat = 1,
 ): THREE.CanvasTexture {
-  const { canvas, ctx } = makeCanvas(512, 512);
-  ctx.fillStyle = baseHex;
-  ctx.fillRect(0, 0, 512, 512);
+  const w = srcCanvas.width;
+  const h = srcCanvas.height;
+  const srcCtx = srcCanvas.getContext('2d')!;
+  const srcData = srcCtx.getImageData(0, 0, w, h).data;
 
-  for (let i = 0; i < 160; i++) {
-    const y = (i / 160) * 512;
-    ctx.strokeStyle = i % 3 === 0 ? highlightHex : grainHex;
-    ctx.globalAlpha = 0.14 + (i % 5) * 0.04;
-    ctx.lineWidth = 1 + (i % 4);
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    for (let x = 0; x <= 512; x += 32) {
-      const wave = Math.sin(x * 0.015 + i * 0.4) * 5 + Math.cos(i * 0.9) * 2;
-      ctx.lineTo(x, y + wave);
+  const { canvas: outCanvas, ctx: outCtx } = makeCanvas(w, h);
+  const outImg = outCtx.createImageData(w, h);
+  const dst = outImg.data;
+
+  const sample = (x: number, y: number): number => {
+    const wx = ((x % w) + w) % w;
+    const wy = ((y % h) + h) % h;
+    return srcData[(wy * w + wx) * 4] / 255;
+  };
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const tl = sample(x - 1, y - 1);
+      const t = sample(x, y - 1);
+      const tr = sample(x + 1, y - 1);
+      const l = sample(x - 1, y);
+      const r = sample(x + 1, y);
+      const bl = sample(x - 1, y + 1);
+      const b = sample(x, y + 1);
+      const br = sample(x + 1, y + 1);
+
+      const dx = tr + 2 * r + br - (tl + 2 * l + bl);
+      const dy = bl + 2 * b + br - (tl + 2 * t + tr);
+
+      let nx = -dx * strength;
+      let ny = -dy * strength;
+      let nz = 1.0;
+      const len = Math.hypot(nx, ny, nz) || 1;
+      nx /= len;
+      ny /= len;
+      nz /= len;
+
+      const idx = (y * w + x) * 4;
+      dst[idx] = Math.round((nx * 0.5 + 0.5) * 255);
+      dst[idx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+      dst[idx + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+      dst[idx + 3] = 255;
     }
-    ctx.stroke();
   }
-  ctx.globalAlpha = 1;
-  return configureTexture(new THREE.CanvasTexture(canvas), isColor, aniso, 2);
+
+  outCtx.putImageData(outImg, 0, 0);
+  return configureTexture(new THREE.CanvasTexture(outCanvas), false, aniso, repeat);
+}
+
+function createWoodHeightAndColor(aniso: number) {
+  const { canvas: colorC, ctx: colorCtx } = makeCanvas(512, 512);
+  const { canvas: heightC, ctx: heightCtx } = makeCanvas(512, 512);
+  const { canvas: roughC, ctx: roughCtx } = makeCanvas(512, 512);
+
+  colorCtx.fillStyle = '#4a2517';
+  colorCtx.fillRect(0, 0, 512, 512);
+  heightCtx.fillStyle = '#808080';
+  heightCtx.fillRect(0, 0, 512, 512);
+  roughCtx.fillStyle = '#888888';
+  roughCtx.fillRect(0, 0, 512, 512);
+
+  // Subtle plank bands + knots + swirling wood grain
+  for (let i = 0; i < 220; i++) {
+    const y = (i / 220) * 512;
+    const isHighlight = i % 4 === 0;
+    const alpha = 0.14 + (i % 6) * 0.035;
+    const lw = 1 + (i % 3);
+
+    const drawWave = (ctx: CanvasRenderingContext2D, stroke: string, a: number) => {
+      ctx.strokeStyle = stroke;
+      ctx.globalAlpha = a;
+      ctx.lineWidth = lw;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      for (let x = 0; x <= 512; x += 24) {
+        const wave =
+          Math.sin(x * 0.014 + i * 0.35) * 5.5 +
+          Math.cos(i * 0.8 + x * 0.008) * 2.5;
+        ctx.lineTo(x, y + wave);
+      }
+      ctx.stroke();
+    };
+
+    drawWave(colorCtx, isHighlight ? '#6a3925' : '#261008', alpha);
+    drawWave(heightCtx, isHighlight ? '#b4b4b4' : '#4a4a4a', alpha * 1.4);
+    drawWave(roughCtx, isHighlight ? '#6e6e6e' : '#a8a8a8', alpha * 1.1);
+  }
+
+  // Plank seam lines
+  colorCtx.globalAlpha = 0.35;
+  colorCtx.strokeStyle = '#1d0b05';
+  colorCtx.lineWidth = 2.5;
+  heightCtx.globalAlpha = 0.7;
+  heightCtx.strokeStyle = '#242424';
+  heightCtx.lineWidth = 3;
+  for (const py of [128, 256, 384]) {
+    colorCtx.beginPath();
+    colorCtx.moveTo(0, py);
+    colorCtx.lineTo(512, py);
+    colorCtx.stroke();
+
+    heightCtx.beginPath();
+    heightCtx.moveTo(0, py);
+    heightCtx.lineTo(512, py);
+    heightCtx.stroke();
+  }
+
+  colorCtx.globalAlpha = 1;
+  heightCtx.globalAlpha = 1;
+  roughCtx.globalAlpha = 1;
+
+  return {
+    woodMahogany: configureTexture(new THREE.CanvasTexture(colorC), true, aniso, 2),
+    woodMahoganyNormal: heightCanvasToNormalTexture(heightC, 2.2, aniso, 2),
+    woodRoughness: configureTexture(new THREE.CanvasTexture(roughC), false, aniso, 2),
+  };
+}
+
+function createStoneMasonryTextures(aniso: number) {
+  const { canvas: colorC, ctx: colorCtx } = makeCanvas(256, 256);
+  const { canvas: heightC, ctx: heightCtx } = makeCanvas(256, 256);
+
+  // Mortar background
+  colorCtx.fillStyle = '#5c5850';
+  colorCtx.fillRect(0, 0, 256, 256);
+  heightCtx.fillStyle = '#383838';
+  heightCtx.fillRect(0, 0, 256, 256);
+
+  const rows = 8;
+  const rowH = 256 / rows;
+  const cols = 4;
+  const colW = 256 / cols;
+
+  for (let r = 0; r < rows; r++) {
+    const offset = (r % 2) * (colW * 0.5);
+    for (let c = -1; c <= cols; c++) {
+      const x = c * colW + offset + 2;
+      const y = r * rowH + 2;
+      const w = colW - 4;
+      const h = rowH - 4;
+
+      const shade = ((r * 7 + c * 13) & 3) * 8;
+      colorCtx.fillStyle = `rgb(${128 + shade}, ${124 + shade}, ${116 + shade})`;
+      colorCtx.fillRect(x, y, w, h);
+
+      // Subtle bevel highlight inside block
+      colorCtx.fillStyle = 'rgba(255,255,255,0.08)';
+      colorCtx.fillRect(x, y, w, 3);
+
+      heightCtx.fillStyle = `rgb(${180 + shade}, ${180 + shade}, ${180 + shade})`;
+      heightCtx.fillRect(x, y, w, h);
+    }
+  }
+
+  return {
+    stoneMasonry: configureTexture(new THREE.CanvasTexture(colorC), true, aniso, 2),
+    stoneMasonryNormal: heightCanvasToNormalTexture(heightC, 2.6, aniso, 2),
+  };
+}
+
+function createRoofSlateNormal(aniso: number): THREE.CanvasTexture {
+  const { canvas, ctx } = makeCanvas(256, 256);
+  ctx.fillStyle = '#585858';
+  ctx.fillRect(0, 0, 256, 256);
+
+  const rows = 10;
+  const rowH = 256 / rows;
+  const cols = 8;
+  const colW = 256 / cols;
+
+  for (let r = 0; r < rows; r++) {
+    const offset = (r % 2) * (colW * 0.5);
+    for (let c = -1; c <= cols; c++) {
+      const x = c * colW + offset + 1;
+      const y = r * rowH + 1;
+      const grad = ctx.createLinearGradient(0, y, 0, y + rowH);
+      grad.addColorStop(0, '#787878');
+      grad.addColorStop(0.82, '#d8d8d8');
+      grad.addColorStop(1, '#323232');
+      ctx.fillStyle = grad;
+      ctx.fillRect(x, y, colW - 2, rowH - 1);
+    }
+  }
+
+  return heightCanvasToNormalTexture(canvas, 2.5, aniso, 2);
 }
 
 function createTerrainAlbedo(terrain: TerrainType, aniso: number): THREE.CanvasTexture {
-  const { canvas, ctx } = makeCanvas(256, 256);
+  const { canvas, ctx } = makeCanvas(512, 512);
 
-  const palettes: Record<TerrainType, [string, string, string]> = {
-    forest: ['#294726', '#1d361c', '#3b5c2d'],
-    pasture: ['#5b8c3e', '#4b7831', '#75a650'],
-    fields: ['#c99e3a', '#a87d24', '#e3bd5b'],
-    hills: ['#9e4c32', '#7c3721', '#ba6647'],
-    mountains: ['#6b7178', '#4f5459', '#8b9299'],
-    desert: ['#d8b97a', '#bd9b59', '#ebd096'],
+  const palettes: Record<TerrainType, [string, string, string, string]> = {
+    forest: ['#284825', '#1a3319', '#3e632f', '#3d2e1e'],
+    pasture: ['#5b8e3d', '#47762f', '#7cb352', '#95c465'],
+    fields: ['#caa039', '#99711e', '#ecc663', '#6b4f1b'],
+    hills: ['#a34e33', '#7a331d', '#c56b49', '#613426'],
+    mountains: ['#6d747c', '#4c5259', '#9299a1', '#383d42'],
+    desert: ['#dab978', '#b99552', '#f0d79f', '#9c7d43'],
   };
 
-  const [base, dark, light] = palettes[terrain];
+  const [base, dark, light, accent] = palettes[terrain];
   ctx.fillStyle = base;
-  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillRect(0, 0, 512, 512);
 
-  // Organic mottled ground detail
-  for (let i = 0; i < 450; i++) {
-    const x = (Math.sin(i * 12.9898) * 43758.5453 % 1 + 1) % 1 * 256;
-    const y = (Math.sin(i * 78.233) * 24634.6345 % 1 + 1) % 1 * 256;
-    const r = 4 + (i % 14);
-    ctx.fillStyle = i % 2 === 0 ? dark : light;
-    ctx.globalAlpha = 0.14;
+  // Multi-scale organic mottled detail
+  for (let i = 0; i < 1200; i++) {
+    const x = (((Math.sin(i * 12.9898) * 43758.5453) % 1) + 1) % 1 * 512;
+    const y = (((Math.sin(i * 78.233) * 24634.6345) % 1) + 1) % 1 * 512;
+    const r = 3 + (i % 18);
+    ctx.fillStyle = i % 5 === 0 ? accent : i % 2 === 0 ? dark : light;
+    ctx.globalAlpha = i % 5 === 0 ? 0.1 : 0.14;
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
   }
 
   if (terrain === 'fields') {
-    // Furrow lines
-    ctx.globalAlpha = 0.25;
-    ctx.strokeStyle = dark;
-    ctx.lineWidth = 3;
-    for (let y = 8; y < 256; y += 16) {
+    // Rich plowed crop furrow strips with soil seams
+    for (let y = 10; y < 512; y += 22) {
+      ctx.globalAlpha = 0.28;
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 4;
       ctx.beginPath();
       ctx.moveTo(0, y);
-      ctx.lineTo(256, y);
+      ctx.lineTo(512, y);
+      ctx.stroke();
+
+      ctx.globalAlpha = 0.24;
+      ctx.strokeStyle = light;
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(0, y + 9);
+      ctx.lineTo(512, y + 9);
+      ctx.stroke();
+    }
+  } else if (terrain === 'hills') {
+    // Sedimentary clay strata contours
+    for (let y = 16; y < 512; y += 36) {
+      ctx.globalAlpha = 0.22;
+      ctx.strokeStyle = light;
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      for (let x = 0; x <= 512; x += 24) {
+        ctx.lineTo(x, y + Math.sin(x * 0.03 + y * 0.1) * 7);
+      }
+      ctx.stroke();
+    }
+  } else if (terrain === 'mountains') {
+    // Fractured alpine scree & slate veins
+    for (let i = 0; i < 40; i++) {
+      const sx = ((i * 73) % 512);
+      const sy = ((i * 137) % 512);
+      ctx.globalAlpha = 0.2;
+      ctx.strokeStyle = i % 2 === 0 ? dark : light;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx + 28, sy + (i % 3 === 0 ? 18 : -16));
+      ctx.lineTo(sx + 54, sy + 6);
       ctx.stroke();
     }
   } else if (terrain === 'desert') {
-    // Wind ripples
-    ctx.globalAlpha = 0.22;
-    ctx.strokeStyle = light;
-    ctx.lineWidth = 4;
-    for (let y = 10; y < 256; y += 22) {
+    // Crisp wind-swept dune crests
+    for (let y = 14; y < 512; y += 28) {
+      ctx.globalAlpha = 0.26;
+      ctx.strokeStyle = light;
+      ctx.lineWidth = 5;
       ctx.beginPath();
       ctx.moveTo(0, y);
-      for (let x = 0; x <= 256; x += 16) {
-        ctx.lineTo(x, y + Math.sin(x * 0.05 + y) * 4);
+      for (let x = 0; x <= 512; x += 24) {
+        ctx.lineTo(x, y + Math.sin(x * 0.038 + y * 0.08) * 6);
+      }
+      ctx.stroke();
+
+      ctx.globalAlpha = 0.16;
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(0, y + 6);
+      for (let x = 0; x <= 512; x += 24) {
+        ctx.lineTo(x, y + 6 + Math.sin(x * 0.038 + y * 0.08) * 6);
       }
       ctx.stroke();
     }
@@ -123,56 +341,107 @@ function createTerrainAlbedo(terrain: TerrainType, aniso: number): THREE.CanvasT
   return configureTexture(new THREE.CanvasTexture(canvas), true, aniso, 1);
 }
 
-function createNoiseBump(aniso: number): THREE.CanvasTexture {
+function createTerrainHeightMaps(aniso: number) {
+  const { canvas: heightC, ctx: heightCtx } = makeCanvas(256, 256);
+  const { canvas: roughC, ctx: roughCtx } = makeCanvas(256, 256);
+  const hImg = heightCtx.createImageData(256, 256);
+  const rImg = roughCtx.createImageData(256, 256);
+
+  for (let y = 0; y < 256; y++) {
+    for (let x = 0; x < 256; x++) {
+      const n1 = Math.sin(x * 0.12) * Math.cos(y * 0.12);
+      const n2 = Math.sin(x * 0.31 + y * 0.19) * 0.5;
+      const n3 = (Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1;
+      const hVal = Math.max(
+        0,
+        Math.min(255, Math.floor(128 + n1 * 42 + n2 * 28 + (n3 - 0.5) * 40)),
+      );
+      const rVal = Math.max(150, Math.min(248, Math.floor(205 + n1 * 24 + (n3 - 0.5) * 20)));
+      const idx = (y * 256 + x) * 4;
+      hImg.data[idx] = hVal;
+      hImg.data[idx + 1] = hVal;
+      hImg.data[idx + 2] = hVal;
+      hImg.data[idx + 3] = 255;
+
+      rImg.data[idx] = rVal;
+      rImg.data[idx + 1] = rVal;
+      rImg.data[idx + 2] = rVal;
+      rImg.data[idx + 3] = 255;
+    }
+  }
+  heightCtx.putImageData(hImg, 0, 0);
+  roughCtx.putImageData(rImg, 0, 0);
+
+  return {
+    terrainNormal: heightCanvasToNormalTexture(heightC, 1.8, aniso, 2),
+    terrainRoughness: configureTexture(new THREE.CanvasTexture(roughC), false, aniso, 2),
+  };
+}
+
+function createOceanNormalMap(aniso: number): THREE.CanvasTexture {
   const { canvas, ctx } = makeCanvas(256, 256);
   const img = ctx.createImageData(256, 256);
-  for (let i = 0; i < img.data.length; i += 4) {
-    const p = i / 4;
-    const v =
-      110 +
-      Math.floor(
-        ((Math.sin(p * 0.17) + Math.cos(p * 0.031)) * 0.5 + 0.5) * 70 +
-          Math.random() * 45,
-      );
-    img.data[i] = v;
-    img.data[i + 1] = v;
-    img.data[i + 2] = v;
-    img.data[i + 3] = 255;
+  for (let y = 0; y < 256; y++) {
+    for (let x = 0; x < 256; x++) {
+      const u = (x / 256) * Math.PI * 2;
+      const v = (y / 256) * Math.PI * 2;
+      const w =
+        Math.sin(u * 2 + v * 1) * 0.45 +
+        Math.cos(u * 3 - v * 2) * 0.35 +
+        Math.sin(u * 1 - v * 4) * 0.2;
+      const val = Math.max(0, Math.min(255, Math.floor(128 + w * 46)));
+      const idx = (y * 256 + x) * 4;
+      img.data[idx] = val;
+      img.data[idx + 1] = val;
+      img.data[idx + 2] = val;
+      img.data[idx + 3] = 255;
+    }
   }
   ctx.putImageData(img, 0, 0);
-  return configureTexture(new THREE.CanvasTexture(canvas), false, aniso, 2);
+  return heightCanvasToNormalTexture(canvas, 0.55, aniso, 2.5);
 }
 
 function createNumberTokenTexture(num: number, aniso: number): THREE.CanvasTexture {
   const { canvas, ctx } = makeCanvas(256, 256);
 
-  // Aged ivory/parchment disc
-  const grad = ctx.createRadialGradient(128, 118, 12, 128, 128, 126);
-  grad.addColorStop(0, '#fbf5e6');
-  grad.addColorStop(0.8, '#e8dcc0');
-  grad.addColorStop(1, '#c8b68e');
+  // Aged ivory parchment disc
+  const grad = ctx.createRadialGradient(128, 114, 14, 128, 128, 126);
+  grad.addColorStop(0, '#fcf7ea');
+  grad.addColorStop(0.75, '#ebe0c5');
+  grad.addColorStop(1, '#c3b086');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 256, 256);
 
-  // Brass double ring
-  ctx.strokeStyle = '#7c5d2c';
+  // Subtle parchment fleck grain
+  for (let i = 0; i < 90; i++) {
+    ctx.fillStyle = i % 2 === 0 ? 'rgba(95, 72, 42, 0.08)' : 'rgba(255, 255, 255, 0.14)';
+    ctx.beginPath();
+    ctx.arc((i * 47) % 256, (i * 89) % 256, 1.5 + (i % 3), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Engraved antique brass double ring
+  ctx.strokeStyle = '#6f5123';
   ctx.lineWidth = 8;
   ctx.beginPath();
-  ctx.arc(128, 128, 112, 0, Math.PI * 2);
+  ctx.arc(128, 128, 113, 0, Math.PI * 2);
   ctx.stroke();
 
-  ctx.strokeStyle = '#b48d49';
+  ctx.strokeStyle = '#c2994c';
   ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.arc(128, 128, 98, 0, Math.PI * 2);
+  ctx.arc(128, 128, 99, 0, Math.PI * 2);
   ctx.stroke();
 
   const isHot = num === 6 || num === 8;
-  ctx.fillStyle = isHot ? '#a61818' : '#1b1510';
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
   ctx.font = 'bold 112px Cinzel, Georgia, serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(String(num), 128, 114);
+  ctx.fillText(String(num), 129, 115);
+
+  ctx.fillStyle = isHot ? '#a31818' : '#1b140f';
+  ctx.fillText(String(num), 128, 113);
 
   // Probability pips
   const dots = 6 - Math.abs(7 - num);
@@ -180,7 +449,7 @@ function createNumberTokenTexture(num: number, aniso: number): THREE.CanvasTextu
   const startX = 128 - ((dots - 1) * spacing) / 2;
   for (let i = 0; i < dots; i++) {
     ctx.beginPath();
-    ctx.arc(startX + i * spacing, 184, 5.5, 0, Math.PI * 2);
+    ctx.arc(startX + i * spacing, 184, 5.8, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -193,19 +462,34 @@ function createNumberTokenTexture(num: number, aniso: number): THREE.CanvasTextu
 
 function createHarborSignTexture(kind: HarborKind, aniso: number): THREE.CanvasTexture {
   const { canvas, ctx } = makeCanvas(256, 256);
-  ctx.fillStyle = '#f2e8cf';
+
+  // Stitched warm canvas sailcloth gradient
+  const grad = ctx.createRadialGradient(128, 128, 18, 128, 128, 165);
+  grad.addColorStop(0, '#f8f0dc');
+  grad.addColorStop(1, '#ddd0b2');
+  ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 256, 256);
 
+  // Subtle vertical sailcloth seam lines
+  ctx.strokeStyle = 'rgba(120, 95, 65, 0.14)';
+  ctx.lineWidth = 2;
+  for (let x = 32; x < 256; x += 32) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, 256);
+    ctx.stroke();
+  }
+
   const colors: Record<HarborKind, string> = {
-    generic_3_1: '#3b4b5c',
-    timber: '#2e5d34',
-    wool: '#6b9440',
-    grain: '#c99322',
-    brick: '#a8442a',
-    ore: '#505b68',
+    generic_3_1: '#2e4459',
+    timber: '#255a30',
+    wool: '#5c8832',
+    grain: '#bf8418',
+    brick: '#a33c23',
+    ore: '#424d5c',
   };
   const labels: Record<HarborKind, string> = {
-    generic_3_1: 'PORT',
+    generic_3_1: 'ANY HARBOR',
     timber: 'TIMBER',
     wool: 'WOOL',
     grain: 'GRAIN',
@@ -213,18 +497,30 @@ function createHarborSignTexture(kind: HarborKind, aniso: number): THREE.CanvasT
     ore: 'ORE',
   };
 
+  // Hem border & corner grommets
   ctx.strokeStyle = colors[kind];
-  ctx.lineWidth = 14;
+  ctx.lineWidth = 12;
   ctx.strokeRect(10, 10, 236, 236);
+  ctx.strokeStyle = '#9c7e47';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(20, 20, 216, 216);
+
+  // Emblem diamond backing
+  ctx.fillStyle = colors[kind];
+  ctx.globalAlpha = 0.12;
+  ctx.beginPath();
+  ctx.arc(128, 118, 72, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
 
   ctx.fillStyle = colors[kind];
   ctx.font = 'bold 84px Cinzel, Georgia, serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(kind === 'generic_3_1' ? '3:1' : '2:1', 128, 102);
+  ctx.fillText(kind === 'generic_3_1' ? '3:1' : '2:1', 128, 106);
 
-  ctx.font = 'bold 34px Plus Jakarta Sans, sans-serif';
-  ctx.fillText(labels[kind], 128, 178);
+  ctx.font = 'bold 28px Plus Jakarta Sans, sans-serif';
+  ctx.fillText(labels[kind], 128, 182);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -235,13 +531,14 @@ function createHarborSignTexture(kind: HarborKind, aniso: number): THREE.CanvasT
 
 function createDieFaceTexture(value: number, aniso: number): THREE.CanvasTexture {
   const { canvas, ctx } = makeCanvas(256, 256);
-  const grad = ctx.createRadialGradient(128, 128, 20, 128, 128, 170);
-  grad.addColorStop(0, '#fcf7ea');
-  grad.addColorStop(1, '#dfd2b5');
+  const grad = ctx.createRadialGradient(128, 128, 18, 128, 128, 175);
+  grad.addColorStop(0, '#fdf9ee');
+  grad.addColorStop(0.78, '#ede0c4');
+  grad.addColorStop(1, '#d1bf9a');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 256, 256);
 
-  ctx.strokeStyle = '#b9a681';
+  ctx.strokeStyle = '#b9a37b';
   ctx.lineWidth = 10;
   ctx.strokeRect(8, 8, 240, 240);
 
@@ -280,9 +577,16 @@ function createDieFaceTexture(value: number, aniso: number): THREE.CanvasTexture
   };
 
   for (const [x, y] of pipCoords[value]) {
-    ctx.fillStyle = value === 1 ? '#8c2222' : '#241b14';
+    const r = value === 1 ? 27 : 20;
+    // Recessed pip lip highlight
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
     ctx.beginPath();
-    ctx.arc(x, y, value === 1 ? 26 : 20, 0, Math.PI * 2);
+    ctx.arc(x + 2, y + 2, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = value === 1 ? '#962222' : '#241a13';
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -295,10 +599,10 @@ function createDieFaceTexture(value: number, aniso: number): THREE.CanvasTexture
 
 function createContactShadowTexture(): THREE.CanvasTexture {
   const { canvas, ctx } = makeCanvas(128, 128);
-  const grad = ctx.createRadialGradient(64, 64, 6, 64, 64, 62);
-  grad.addColorStop(0, 'rgba(12, 10, 8, 0.55)');
-  grad.addColorStop(0.55, 'rgba(12, 10, 8, 0.24)');
-  grad.addColorStop(1, 'rgba(12, 10, 8, 0)');
+  const grad = ctx.createRadialGradient(64, 64, 8, 64, 64, 62);
+  grad.addColorStop(0, 'rgba(10, 8, 6, 0.58)');
+  grad.addColorStop(0.55, 'rgba(10, 8, 6, 0.24)');
+  grad.addColorStop(1, 'rgba(10, 8, 6, 0)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 128, 128);
   const tex = new THREE.CanvasTexture(canvas);
@@ -311,10 +615,12 @@ export function createProceduralTextureSet(
 ): ProceduralTextureSet {
   const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
 
-  const woodMahogany = createWoodTexture('#462417', '#2b130a', '#613423', aniso, true);
-  const woodGrainBump = createWoodTexture('#808080', '#484848', '#b8b8b8', aniso, false);
-  const oceanFoamBump = createNoiseBump(aniso);
-  const terrainBump = createNoiseBump(aniso);
+  const { woodMahogany, woodMahoganyNormal, woodRoughness } =
+    createWoodHeightAndColor(aniso);
+  const { stoneMasonry, stoneMasonryNormal } = createStoneMasonryTextures(aniso);
+  const roofSlateNormal = createRoofSlateNormal(aniso);
+  const oceanNormal = createOceanNormalMap(aniso);
+  const { terrainNormal, terrainRoughness } = createTerrainHeightMaps(aniso);
 
   const terrains: TerrainType[] = [
     'forest',
@@ -351,19 +657,29 @@ export function createProceduralTextureSet(
 
   return {
     woodMahogany,
-    woodGrainBump,
-    oceanFoamBump,
+    woodMahoganyNormal,
+    woodRoughness,
+    stoneMasonry,
+    stoneMasonryNormal,
+    roofSlateNormal,
+    oceanNormal,
     terrainMaps,
-    terrainBump,
+    terrainNormal,
+    terrainRoughness,
     numberTokens,
     harborSigns,
     diceFaces,
     contactShadow,
     dispose: () => {
       woodMahogany.dispose();
-      woodGrainBump.dispose();
-      oceanFoamBump.dispose();
-      terrainBump.dispose();
+      woodMahoganyNormal.dispose();
+      woodRoughness.dispose();
+      stoneMasonry.dispose();
+      stoneMasonryNormal.dispose();
+      roofSlateNormal.dispose();
+      oceanNormal.dispose();
+      terrainNormal.dispose();
+      terrainRoughness.dispose();
       Object.values(terrainMaps).forEach((t) => t.dispose());
       numberTokens.forEach((t) => t.dispose());
       harborSigns.forEach((t) => t.dispose());

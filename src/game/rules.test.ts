@@ -11,6 +11,7 @@ import {
   getValidSettlementVertices,
   sanitizeStateForPublic,
 } from './rules';
+import { evaluateBotTradeResponse } from './aiBot';
 
 test('hex topology builds 19 hexes, 54 vertices, 72 edges, and 9 harbors', () => {
   const topo = buildBoardTopology();
@@ -209,4 +210,205 @@ test('longest road splits correctly when opponent places a settlement in the mid
 
   // Road is now split into lengths 2 and 3 -> longest is 3
   assert.equal(calculateLongestRoad(state, 'p1'), 3);
+});
+
+test('rolling 7 triggers half-hand discard for 8+ cards and robber steal', () => {
+  let state = createInitialGameState({
+    roomId: 'ROB7',
+    preset: 'standard',
+    players: [
+      { id: 'p1', name: 'Alice', color: 'crimson' },
+      { id: 'p2', name: 'Bob', color: 'navy' },
+    ],
+  });
+  state.phase = 'roll';
+  state.players[1].resources = {
+    timber: 4,
+    wool: 2,
+    grain: 2,
+    brick: 0,
+    ore: 0,
+  };
+  // Place Bob settlement on a non-desert hex
+  const targetHex = state.hexes.find((h) => !h.hasRobber)!;
+  const adjV = state.vertices.find((v) => v.adjacentHexIds.includes(targetHex.id))!;
+  adjV.building = { ownerId: 'p2', type: 'settlement' };
+
+  // Deterministic RNG returning 0.5 -> d1=4, d2=3 -> sum 7!
+  // Wait: Math.floor(0.5*6)+1 = 4, and for 7 we can use alternating rng
+  let toggle = 0;
+  const rng7 = () => {
+    toggle += 1;
+    return toggle === 1 ? 0.5 : 0.4; // d1 = 4, d2 = 3 => sum 7
+  };
+
+  let res = applyAction(state, { type: 'ROLL_DICE', playerId: 'p1' }, rng7);
+  assert.equal(res.ok, true);
+  state = res.ok ? res.state : state;
+  assert.equal(state.phase, 'discard');
+  assert.deepEqual(state.pendingDiscardPlayerIds, ['p2']);
+
+  // Bob discards 4 cards
+  res = applyAction(state, {
+    type: 'DISCARD_RESOURCES',
+    playerId: 'p2',
+    bundle: { timber: 3, wool: 1, grain: 0, brick: 0, ore: 0 },
+  });
+  assert.equal(res.ok, true);
+  state = res.ok ? res.state : state;
+  assert.equal(state.phase, 'move_robber');
+
+  // Alice moves robber onto targetHex and automatically steals 1 from Bob (sole adjacent)
+  res = applyAction(state, { type: 'MOVE_ROBBER', playerId: 'p1', hexId: targetHex.id });
+  assert.equal(res.ok, true);
+  state = res.ok ? res.state : state;
+  assert.equal(state.phase, 'main');
+  assert.equal(
+    state.players[0].resources.timber +
+      state.players[0].resources.wool +
+      state.players[0].resources.grain,
+    1,
+  );
+  assert.equal(
+    state.players[1].resources.timber +
+      state.players[1].resources.wool +
+      state.players[1].resources.grain,
+    3,
+  );
+});
+
+test('development cards support Year of Plenty, Monopoly, Knights (Largest Army), and hidden VP victory', () => {
+  let state = createInitialGameState({
+    roomId: 'DEV',
+    preset: 'standard',
+    victoryTarget: 6,
+    players: [
+      { id: 'p1', name: 'Alice', color: 'crimson' },
+      { id: 'p2', name: 'Bob', color: 'navy' },
+    ],
+  });
+  state.phase = 'main';
+  state.dice = [2, 3];
+  state.turnNumber = 2;
+  state.players[1].resources = {
+    timber: 3,
+    wool: 0,
+    grain: 0,
+    brick: 0,
+    ore: 0,
+  };
+  state.players[0].settlementsBuilt = 2; // 2 VP
+  state.players[0].publicVP = 2;
+  state.players[0].totalVP = 2;
+  state.players[0].devCards = [
+    { id: 'c_yop', type: 'year_of_plenty', boughtTurn: 1, played: false },
+    { id: 'c_mono', type: 'monopoly', boughtTurn: 1, played: false },
+    { id: 'c_k1', type: 'knight', boughtTurn: 1, played: false },
+    { id: 'c_k2', type: 'knight', boughtTurn: 1, played: false },
+    { id: 'c_k3', type: 'knight', boughtTurn: 1, played: false },
+    { id: 'c_vp1', type: 'victory_point', boughtTurn: 1, played: false },
+  ];
+
+  // Year of Plenty adds 2 chosen resources
+  let res = applyAction(state, {
+    type: 'PLAY_DEV_CARD',
+    playerId: 'p1',
+    cardId: 'c_yop',
+    resource1: 'ore',
+    resource2: 'grain',
+  });
+  assert.equal(res.ok, true);
+  state = res.ok ? res.state : state;
+  assert.equal(state.players[0].resources.ore, 1);
+  assert.equal(state.players[0].resources.grain, 1);
+
+  // Only 1 dev card per turn -> Monopoly rejected same turn
+  res = applyAction(state, {
+    type: 'PLAY_DEV_CARD',
+    playerId: 'p1',
+    cardId: 'c_mono',
+    resource1: 'timber',
+  });
+  assert.equal(res.ok, false);
+
+  // Advance to next turn so Monopoly can be played
+  state.devCardPlayedThisTurn = false;
+  state.turnNumber = 3;
+  res = applyAction(state, {
+    type: 'PLAY_DEV_CARD',
+    playerId: 'p1',
+    cardId: 'c_mono',
+    resource1: 'timber',
+  });
+  assert.equal(res.ok, true);
+  state = res.ok ? res.state : state;
+  assert.equal(state.players[0].resources.timber, 3);
+  assert.equal(state.players[1].resources.timber, 0);
+
+  // Play 3 knights across turns -> Largest Army (+2 VP) + 2 settlements (2 VP) + 1 hidden VP = 5 VP
+  for (const kid of ['c_k1', 'c_k2', 'c_k3']) {
+    state.devCardPlayedThisTurn = false;
+    state.phase = 'main';
+    res = applyAction(state, { type: 'PLAY_DEV_CARD', playerId: 'p1', cardId: kid });
+    assert.equal(res.ok, true);
+    state = res.ok ? res.state : state;
+    const altHex = state.hexes.find((h) => !h.hasRobber)!;
+    res = applyAction(state, { type: 'MOVE_ROBBER', playerId: 'p1', hexId: altHex.id });
+    assert.equal(res.ok, true);
+    state = res.ok ? res.state : state;
+  }
+
+  assert.equal(state.players[0].hasLargestArmy, true);
+  assert.equal(state.players[0].publicVP, 4);
+  assert.equal(state.players[0].totalVP, 5);
+
+  // Buying a Victory Point card from top of deck reaches 6 VP -> instant victory
+  state.devDeck.push('victory_point');
+  state.players[0].resources = { timber: 0, wool: 1, grain: 1, brick: 0, ore: 1 };
+  res = applyAction(state, { type: 'BUY_DEV_CARD', playerId: 'p1' });
+  assert.equal(res.ok, true);
+  state = res.ok ? res.state : state;
+  assert.equal(state.phase, 'finished');
+  assert.equal(state.winnerId, 'p1');
+});
+
+test('player-to-player trade offers and bot trade evaluation work cleanly', () => {
+  let state = createInitialGameState({
+    roomId: 'TRADE',
+    preset: 'standard',
+    players: [
+      { id: 'p1', name: 'Alice', color: 'crimson' },
+      { id: 'bot1', name: 'Capt. Thorne', color: 'navy', isBot: true },
+    ],
+  });
+  state.phase = 'main';
+  state.dice = [5, 4];
+  state.players[0].resources = { timber: 2, wool: 0, grain: 0, brick: 0, ore: 0 };
+  state.players[1].resources = { timber: 0, wool: 2, grain: 0, brick: 0, ore: 0 };
+
+  let res = applyAction(state, {
+    type: 'CREATE_TRADE_OFFER',
+    playerId: 'p1',
+    toPlayerId: null,
+    offering: { timber: 1, wool: 0, grain: 0, brick: 0, ore: 0 },
+    requesting: { timber: 0, wool: 1, grain: 0, brick: 0, ore: 0 },
+  });
+  assert.equal(res.ok, true);
+  state = res.ok ? res.state : state;
+  assert.equal(state.activeTradeOffers.length, 1);
+
+  const offer = state.activeTradeOffers[0];
+  assert.equal(evaluateBotTradeResponse(state, 'bot1', offer), true);
+
+  res = applyAction(state, {
+    type: 'RESPOND_TRADE_OFFER',
+    playerId: 'bot1',
+    offerId: offer.id,
+    accept: true,
+  });
+  assert.equal(res.ok, true);
+  state = res.ok ? res.state : state;
+  assert.equal(state.activeTradeOffers.length, 0);
+  assert.equal(state.players[0].resources.wool, 1);
+  assert.equal(state.players[1].resources.timber, 1);
 });

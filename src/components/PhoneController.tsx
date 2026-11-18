@@ -8,6 +8,8 @@ import {
   Repeat,
   Send,
   Shield,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import {
@@ -45,7 +47,6 @@ const FACTION_COLORS: FactionColor[] = ['crimson', 'navy', 'forest', 'ivory'];
 /**
  * Interactive tactile SVG mini-map rendered on the Phone Controller whenever
  * the player needs to pick a vertex (Settlement/City), edge (Road), or hex (Robber).
- * Every click immediately validates through the server and animates onto the TV 3D board!
  */
 function PhonePlacementMap({
   game,
@@ -90,7 +91,9 @@ function PhonePlacementMap({
         <span className="text-xs font-semibold text-[#f5d88c]">
           Tap a glowing {mode} spot on the island
         </span>
-        <span className="text-[11px] text-[#94a3b8]">{validIds.size} valid</span>
+        <span className="font-mono-num text-[11px] text-[#94a3b8]">
+          {validIds.size} valid
+        </span>
       </div>
 
       <svg viewBox="-9 -8.6 18 17.2" className="w-full max-h-[300px] touch-manipulation">
@@ -198,6 +201,28 @@ function PhonePlacementMap({
                   {h.numberToken}
                 </text>
               )}
+              {h.hasRobber && (
+                <g>
+                  <circle
+                    cx={h.x + 0.45}
+                    cy={h.z + 0.4}
+                    r="0.32"
+                    fill="#1e1c24"
+                    stroke="#ef4444"
+                    strokeWidth="0.08"
+                  />
+                  <text
+                    x={h.x + 0.45}
+                    y={h.z + 0.52}
+                    textAnchor="middle"
+                    fontSize="0.34"
+                    fontWeight="bold"
+                    fill="#fca5a5"
+                  >
+                    R
+                  </text>
+                </g>
+              )}
               {isValidHex && (
                 <circle
                   cx={h.x}
@@ -231,9 +256,9 @@ function PhonePlacementMap({
                 x2={vB.x}
                 y2={vB.z}
                 stroke={e.ownerId ? playerColors.get(e.ownerId) : '#f5d88c'}
-                strokeWidth={isValid ? 0.34 : 0.24}
+                strokeWidth={isValid ? 0.36 : 0.25}
                 strokeLinecap="round"
-                opacity={isValid ? 0.92 : 1}
+                opacity={isValid ? 0.94 : 1}
               />
               {isValid && (
                 <line
@@ -242,7 +267,7 @@ function PhonePlacementMap({
                   x2={vB.x}
                   y2={vB.z}
                   stroke="transparent"
-                  strokeWidth="0.85"
+                  strokeWidth="0.95"
                 />
               )}
             </g>
@@ -264,7 +289,7 @@ function PhonePlacementMap({
                 <circle
                   cx={v.x}
                   cy={v.z}
-                  r={v.building.type === 'city' ? 0.38 : 0.28}
+                  r={v.building.type === 'city' ? 0.39 : 0.28}
                   fill={playerColors.get(v.building.ownerId)}
                   stroke="#f8f3e6"
                   strokeWidth="0.08"
@@ -275,12 +300,12 @@ function PhonePlacementMap({
                   <circle
                     cx={v.x}
                     cy={v.z}
-                    r="0.42"
-                    fill="rgba(245, 216, 140, 0.35)"
+                    r="0.44"
+                    fill="rgba(245, 216, 140, 0.38)"
                     stroke="#f5d88c"
                     strokeWidth="0.12"
                   />
-                  <circle cx={v.x} cy={v.z} r="0.65" fill="transparent" />
+                  <circle cx={v.x} cy={v.z} r="0.68" fill="transparent" />
                 </>
               )}
             </g>
@@ -295,6 +320,8 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
   const room = useGameStore((s) => s.room);
   const playerId = useGameStore((s) => s.playerId);
   const privateState = useGameStore((s) => s.privateState);
+  const muted = useGameStore((s) => s.muted);
+  const toggleMuted = useGameStore((s) => s.toggleMuted);
   const joinRoom = useGameStore((s) => s.joinRoom);
   const leaveToTitle = useGameStore((s) => s.leaveToTitle);
   const dispatchGameAction = useGameStore((s) => s.dispatchGameAction);
@@ -493,7 +520,6 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
     ore: 4,
   };
 
-  // Determine if interactive placement map is needed right now
   let activePlacementMode: 'settlement' | 'road' | 'city' | 'robber' | null = null;
   if (isMyTurn) {
     if (
@@ -519,7 +545,6 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
     game.phase === 'discard' && game.pendingDiscardPlayerIds.includes(playerId);
   const requiredDiscard = Math.floor(totalResourceCount(myRes) / 2);
 
-  // Incoming player-to-player trade offers
   const incomingOffers = game.activeTradeOffers.filter(
     (o) =>
       o.fromPlayerId !== playerId &&
@@ -546,7 +571,15 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
             </div>
           </div>
         </div>
-        <div className="text-right shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={toggleMuted}
+            aria-label={muted ? 'Unmute audio' : 'Mute audio'}
+            className="min-h-[36px] min-w-[36px] rounded-lg bg-[#1a2634] flex items-center justify-center text-[#cbd5e1] cursor-pointer"
+          >
+            {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+          </button>
           <div className="font-mono-num text-xs font-bold text-[#f5d88c]">
             PIN {room.roomId}
           </div>
@@ -573,8 +606,13 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
             {RES_KEYS.map((r) => (
               <div
                 key={r}
-                className="bg-[#14202c] border border-white/10 rounded-xl py-2 px-1 flex flex-col items-center"
+                className="bg-[#14202c] border border-white/10 rounded-xl py-2.5 px-1 flex flex-col items-center relative"
               >
+                {ratios[r] < 4 && (
+                  <span className="absolute -top-2 right-1 font-mono-num text-[9px] font-bold px-1 py-0.5 rounded bg-[#182635] border border-[#d4aa54]/50 text-[#f5d88c] leading-none">
+                    {ratios[r]}:1
+                  </span>
+                )}
                 <ResourceIcon type={r} className="w-7 h-7" />
                 <span className="font-mono-num text-base font-bold text-[#f7eed7] mt-1">
                   {myRes[r]}
@@ -609,7 +647,7 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
                       onClick={() =>
                         setDiscardDraft((d) => ({ ...d, [r]: Math.max(0, d[r] - 1) }))
                       }
-                      className="w-9 h-9 rounded-lg bg-[#1d2c3b] font-bold"
+                      className="w-10 h-10 rounded-lg bg-[#1d2c3b] font-bold"
                     >
                       -
                     </button>
@@ -624,7 +662,7 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
                           [r]: Math.min(myRes[r], d[r] + 1),
                         }))
                       }
-                      className="w-9 h-9 rounded-lg bg-[#1d2c3b] font-bold"
+                      className="w-10 h-10 rounded-lg bg-[#1d2c3b] font-bold"
                     >
                       +
                     </button>
@@ -859,7 +897,11 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
             >
               <div>
                 <div className="text-sm font-semibold text-[#f7eed7]">Build Road</div>
-                <div className="text-xs text-[#9fb0c2]">1 Timber · 1 Brick</div>
+                <div className="text-xs text-[#9fb0c2] flex items-center gap-1 mt-0.5">
+                  <ResourceIcon type="timber" className="w-4 h-4" />
+                  <ResourceIcon type="brick" className="w-4 h-4" />
+                  <span>1 Timber · 1 Brick</span>
+                </div>
               </div>
               <span className="text-xs font-semibold text-[#f5d88c]">
                 {placementIntent === 'road' ? 'Cancel' : 'Place'}
@@ -885,8 +927,11 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
                 <div className="text-sm font-semibold text-[#f7eed7]">
                   Build Settlement (+1 VP)
                 </div>
-                <div className="text-xs text-[#9fb0c2]">
-                  1 Timber · 1 Brick · 1 Wool · 1 Grain
+                <div className="text-xs text-[#9fb0c2] flex items-center gap-1 mt-0.5">
+                  <ResourceIcon type="timber" className="w-4 h-4" />
+                  <ResourceIcon type="brick" className="w-4 h-4" />
+                  <ResourceIcon type="wool" className="w-4 h-4" />
+                  <ResourceIcon type="grain" className="w-4 h-4" />
                 </div>
               </div>
               <span className="text-xs font-semibold text-[#f5d88c]">
@@ -911,7 +956,13 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
                 <div className="text-sm font-semibold text-[#f7eed7]">
                   Upgrade to City (+2 VP)
                 </div>
-                <div className="text-xs text-[#9fb0c2]">2 Grain · 3 Ore</div>
+                <div className="text-xs text-[#9fb0c2] flex items-center gap-1 mt-0.5">
+                  <ResourceIcon type="grain" className="w-4 h-4" />
+                  <ResourceIcon type="grain" className="w-4 h-4" />
+                  <ResourceIcon type="ore" className="w-4 h-4" />
+                  <ResourceIcon type="ore" className="w-4 h-4" />
+                  <ResourceIcon type="ore" className="w-4 h-4" />
+                </div>
               </div>
               <span className="text-xs font-semibold text-[#f5d88c]">
                 {placementIntent === 'city' ? 'Cancel' : 'Upgrade'}
@@ -933,7 +984,11 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
                 <div className="text-sm font-semibold text-[#f7eed7]">
                   Buy Development Card ({game.devDeckRemaining} left)
                 </div>
-                <div className="text-xs text-[#9fb0c2]">1 Wool · 1 Grain · 1 Ore</div>
+                <div className="text-xs text-[#9fb0c2] flex items-center gap-1 mt-0.5">
+                  <ResourceIcon type="wool" className="w-4 h-4" />
+                  <ResourceIcon type="grain" className="w-4 h-4" />
+                  <ResourceIcon type="ore" className="w-4 h-4" />
+                </div>
               </div>
               <span className="text-xs font-semibold text-[#f5d88c]">Draw</span>
             </button>
@@ -1000,10 +1055,10 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
               <div className="text-xs font-semibold text-[#cbb894]">
                 Propose Player Trade
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 {RES_KEYS.map((r) => (
                   <div key={r} className="flex items-center justify-between text-xs">
-                    <span className="w-16 text-[#cbd5e1]">{RESOURCE_META[r].label}</span>
+                    <span className="w-14 text-[#cbd5e1]">{RESOURCE_META[r].label}</span>
                     <div className="flex items-center gap-1.5">
                       <span className="text-[10px] text-[#94a3b8]">Give</span>
                       <button
@@ -1011,7 +1066,7 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
                         onClick={() =>
                           setOfferGive((o) => ({ ...o, [r]: Math.max(0, o[r] - 1) }))
                         }
-                        className="w-8 h-8 rounded bg-[#1d2b3a]"
+                        className="w-9 h-9 rounded bg-[#1d2b3a]"
                       >
                         -
                       </button>
@@ -1024,7 +1079,7 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
                             [r]: Math.min(myRes[r], o[r] + 1),
                           }))
                         }
-                        className="w-8 h-8 rounded bg-[#1d2b3a]"
+                        className="w-9 h-9 rounded bg-[#1d2b3a]"
                       >
                         +
                       </button>
@@ -1036,7 +1091,7 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
                         onClick={() =>
                           setOfferWant((o) => ({ ...o, [r]: Math.max(0, o[r] - 1) }))
                         }
-                        className="w-8 h-8 rounded bg-[#1d2b3a]"
+                        className="w-9 h-9 rounded bg-[#1d2b3a]"
                       >
                         -
                       </button>
@@ -1046,7 +1101,7 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
                         onClick={() =>
                           setOfferWant((o) => ({ ...o, [r]: o[r] + 1 }))
                         }
-                        className="w-8 h-8 rounded bg-[#1d2b3a]"
+                        className="w-9 h-9 rounded bg-[#1d2b3a]"
                       >
                         +
                       </button>

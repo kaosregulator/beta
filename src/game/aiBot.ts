@@ -15,6 +15,7 @@ import {
   type GameAction,
   type GameState,
   type ResourceType,
+  type TradeOffer,
 } from './types';
 
 function numberProbabilityDots(num: number | null): number {
@@ -37,6 +38,57 @@ function scoreVertex(state: GameState, vertexId: string): number {
   score += seenRes.size * 1.5;
   if (v.harborId) score += 0.8;
   return score;
+}
+
+/**
+ * Evaluates an open human-to-player trade offer from a bot's perspective.
+ * Bots accept fair or advantageous trades that improve their build readiness.
+ */
+export function evaluateBotTradeResponse(
+  state: GameState,
+  botId: string,
+  offer: TradeOffer,
+): boolean {
+  const bot = state.players.find((p) => p.id === botId);
+  if (!bot || !bot.isBot || state.phase !== 'main') return false;
+  if (offer.fromPlayerId === botId) return false;
+  if (offer.toPlayerId && offer.toPlayerId !== botId) return false;
+  if (offer.rejectedBy.includes(botId)) return false;
+  if (!hasResources(bot.resources, offer.requesting)) return false;
+
+  const resKeys: ResourceType[] = ['timber', 'wool', 'grain', 'brick', 'ore'];
+  let gainScore = 0;
+  let costScore = 0;
+
+  for (const r of resKeys) {
+    const giveQty = offer.requesting[r];
+    const getQty = offer.offering[r];
+    // Surplus resources cost less; scarce resources are valued higher
+    const current = bot.resources[r];
+    if (getQty > 0) {
+      const scarcityBonus = current === 0 ? 1.5 : current === 1 ? 1.2 : 0.9;
+      gainScore += getQty * scarcityBonus;
+    }
+    if (giveQty > 0) {
+      const retentionCost = current - giveQty === 0 ? 1.35 : 0.95;
+      costScore += giveQty * retentionCost;
+    }
+  }
+
+  // Slight bonus if trade immediately enables a settlement or city upgrade
+  const afterResources = { ...bot.resources };
+  for (const r of resKeys) {
+    afterResources[r] = afterResources[r] - offer.requesting[r] + offer.offering[r];
+  }
+  const canBuildCityNow = hasResources(bot.resources, BUILD_COSTS.city);
+  const canBuildCityAfter = hasResources(afterResources, BUILD_COSTS.city);
+  if (!canBuildCityNow && canBuildCityAfter) gainScore += 1.2;
+
+  const canBuildSettleNow = hasResources(bot.resources, BUILD_COSTS.settlement);
+  const canBuildSettleAfter = hasResources(afterResources, BUILD_COSTS.settlement);
+  if (!canBuildSettleNow && canBuildSettleAfter) gainScore += 1.0;
+
+  return gainScore >= costScore;
 }
 
 export function chooseBotAction(state: GameState, botId: string): GameAction | null {
@@ -83,6 +135,21 @@ export function chooseBotAction(state: GameState, botId: string): GameAction | n
   }
 
   if (state.phase === 'roll') {
+    // Play a Knight before rolling if the Robber is currently blocking one of the bot's hexes
+    if (!state.devCardPlayedThisTurn) {
+      const knight = bot.devCards.find(
+        (c) => c.type === 'knight' && !c.played && c.boughtTurn < state.turnNumber,
+      );
+      const robberHex = state.hexes.find((h) => h.hasRobber);
+      const robberHurtsBot =
+        robberHex &&
+        state.vertices.some(
+          (v) => v.building?.ownerId === botId && v.adjacentHexIds.includes(robberHex.id),
+        );
+      if (knight && robberHurtsBot) {
+        return { type: 'PLAY_DEV_CARD', playerId: botId, cardId: knight.id };
+      }
+    }
     return { type: 'ROLL_DICE', playerId: botId };
   }
 

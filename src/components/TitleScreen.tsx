@@ -1,20 +1,32 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, Monitor, Play, Smartphone, Volume2, VolumeX } from 'lucide-react';
-import { useGameStore, type QualityPreset } from '../store/useGameStore';
+import {
+  BookOpen,
+  Monitor,
+  Play,
+  Settings,
+  Smartphone,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
+import { FACTION_META, type FactionColor } from '../game/types';
+import { useGameStore } from '../store/useGameStore';
 import { IsleholdCrest } from './ResourceArt';
+import { SettingsModal } from './SettingsModal';
 import { TutorialModal } from './TutorialModal';
+
+const COLORS: FactionColor[] = ['crimson', 'navy', 'forest', 'ivory'];
 
 export function TitleScreen() {
   const createRoom = useGameStore((s) => s.createRoom);
   const setScreen = useGameStore((s) => s.setScreen);
-  const quality = useGameStore((s) => s.quality);
-  const setQuality = useGameStore((s) => s.setQuality);
   const muted = useGameStore((s) => s.muted);
   const toggleMuted = useGameStore((s) => s.toggleMuted);
   const errorMessage = useGameStore((s) => s.errorMessage);
   const clearError = useGameStore((s) => s.clearError);
 
+  const [hostColor, setHostColor] = useState<FactionColor>('crimson');
   const [showTutorial, setShowTutorial] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const handleQuickPlay = async () => {
@@ -24,7 +36,7 @@ export function TitleScreen() {
       await createRoom({
         mode: 'quick_play',
         hostName: 'Commander',
-        hostColor: 'crimson',
+        hostColor,
         preset: 'random_balanced',
         victoryTarget: 10,
         botCount: 3,
@@ -51,7 +63,7 @@ export function TitleScreen() {
   // Support Enter / Space start handshake on Title screen
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (showTutorial) return;
+      if (showTutorial || showSettings) return;
       if (e.key === 'Enter' || e.key === ' ') {
         const tag = (e.target as HTMLElement | null)?.tagName;
         if (tag === 'INPUT' || tag === 'BUTTON' || tag === 'SELECT') return;
@@ -64,47 +76,43 @@ export function TitleScreen() {
   });
 
   return (
-    <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-6 md:p-10">
-      {/* Top quiet bar: quality & audio controls */}
+    <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-5 md:p-10">
+      {/* Top quiet utility bar */}
       <div className="flex items-center justify-between gap-4">
-        <div className="pointer-events-auto flex items-center gap-3 bg-[#101923]/90 border border-[#d4aa54]/30 rounded-lg px-3.5 py-2">
-          <span className="text-xs font-medium tracking-wide text-[#d4aa54]">
+        <div className="pointer-events-auto flex items-center gap-3 bg-[#101821]/92 border border-[#d4aa54]/30 rounded-xl px-4 py-2 shadow-lg">
+          <span className="text-xs font-semibold tracking-wider uppercase text-[#d4aa54]">
             Boared Games Room
           </span>
           <span className="text-[#6c7a89]" aria-hidden="true">·</span>
-          <span className="text-xs text-[#cbd5e1]">3D Tabletop Edition</span>
+          <span className="text-xs text-[#cbd5e1]">Handcrafted 3D Tabletop</span>
         </div>
 
         <div className="pointer-events-auto flex items-center gap-2">
-          <label htmlFor="quality-select" className="sr-only">
-            Graphics Quality
-          </label>
-          <select
-            id="quality-select"
-            value={quality}
-            onChange={(e) => setQuality(e.target.value as QualityPreset)}
-            className="h-10 rounded-lg bg-[#101923]/92 border border-[#d4aa54]/30 px-3 text-xs font-medium text-[#f5efe2] focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+          <button
+            type="button"
+            onClick={() => setShowSettings(true)}
+            aria-label="Open settings"
+            className="h-10 px-3.5 rounded-xl bg-[#101821]/92 border border-[#d4aa54]/30 hover:border-[#d4aa54] flex items-center gap-2 text-xs font-medium text-[#e8dcc0] transition-colors cursor-pointer"
           >
-            <option value="high">High Detail</option>
-            <option value="balanced">Balanced</option>
-            <option value="reduced">Reduced Effects</option>
-          </select>
+            <Settings className="w-4 h-4 text-[#d4aa54]" />
+            <span className="hidden sm:inline">Settings</span>
+          </button>
 
           <button
             type="button"
             onClick={toggleMuted}
             aria-label={muted ? 'Unmute audio' : 'Mute audio'}
-            className="h-10 w-10 rounded-lg bg-[#101923]/92 border border-[#d4aa54]/30 flex items-center justify-center text-[#e8dcc0] hover:border-[#d4aa54] transition-colors"
+            className="h-10 w-10 rounded-xl bg-[#101821]/92 border border-[#d4aa54]/30 hover:border-[#d4aa54] flex items-center justify-center text-[#e8dcc0] transition-colors cursor-pointer"
           >
             {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
         </div>
       </div>
 
-      {/* Main Title Card anchored cleanly on the left side leaving right/center 3D island open */}
-      <div className="my-auto max-w-md pointer-events-auto bg-[#101821]/92 border border-[#d4aa54]/35 rounded-2xl p-6 md:p-8 shadow-2xl">
-        <div className="flex items-center gap-4 mb-5">
-          <IsleholdCrest className="w-14 h-14 shrink-0" />
+      {/* Main Title Card anchored cleanly on the left side leaving right/center 3D island showcase wide open */}
+      <div className="my-auto max-w-md pointer-events-auto bg-[#101821]/94 border border-[#d4aa54]/40 rounded-2xl p-6 md:p-8 shadow-2xl">
+        <div className="flex items-center gap-4 mb-4">
+          <IsleholdCrest className="w-16 h-16 shrink-0" />
           <div>
             <h1 className="font-display text-3xl md:text-4xl font-bold tracking-wider text-[#f7eed7] text-balance">
               ISLEHOLD
@@ -115,15 +123,47 @@ export function TitleScreen() {
           </div>
         </div>
 
-        <p className="text-sm text-[#cbd5e1] leading-relaxed mb-6">
-          Chart coastlines, raise timber settlements into stone citadels, and command
-          maritime harbors on a handcrafted miniature island board.
+        <p className="text-sm text-[#cbd5e1] leading-relaxed mb-5">
+          Chart harbors, raise timber settlements into fortified stone citadels, and command
+          rival trade routes across a living miniature diorama.
         </p>
+
+        {/* Quick Play Faction Banner Picker */}
+        <div className="mb-5">
+          <div className="text-[11px] uppercase tracking-wider text-[#cbb894] mb-2">
+            Your Faction Banner
+          </div>
+          <div className="grid grid-cols-4 gap-2">
+            {COLORS.map((c) => {
+              const fm = FACTION_META[c];
+              const active = hostColor === c;
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setHostColor(c)}
+                  aria-label={`Select ${fm.label}`}
+                  className={`min-h-[38px] rounded-lg px-2 py-1.5 border flex items-center justify-center gap-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                    active
+                      ? 'bg-[#1f2e3d] border-[#f5d88c] text-[#f7eed7]'
+                      : 'bg-[#15202b] border-white/10 text-[#9fb0c2] hover:border-white/25'
+                  }`}
+                >
+                  <span
+                    className="w-3 h-3 rounded-sm border border-white/30 shrink-0"
+                    style={{ backgroundColor: fm.hex }}
+                  />
+                  <span className="truncate capitalize">{c}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         {errorMessage && (
           <div
             role="alert"
-            className="mb-4 rounded-lg bg-red-950/90 border border-red-500/40 px-3.5 py-2.5 text-xs text-red-100 flex items-center justify-between gap-2"
+            className="mb-4 rounded-xl bg-red-950/90 border border-red-500/40 px-3.5 py-2.5 text-xs text-red-100 flex items-center justify-between gap-2"
           >
             <span>{errorMessage}</span>
             <button
@@ -181,12 +221,13 @@ export function TitleScreen() {
       </div>
 
       {/* Bottom control hint line */}
-      <div className="flex items-center justify-between text-xs text-[#a3b1c2]">
+      <div className="flex items-center justify-between text-xs text-[#b5c2d1]">
         <span>Drag to Orbit · Scroll to Zoom · Click Highlighted Sites to Build</span>
         <span className="hidden sm:inline">Press Enter to Quick Start</span>
       </div>
 
       {showTutorial && <TutorialModal onClose={() => setShowTutorial(false)} />}
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </div>
   );
 }

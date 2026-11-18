@@ -36,11 +36,11 @@ export function TVLobby() {
 
   return (
     <div className="fixed inset-0 z-10 pointer-events-none flex items-center justify-center p-4 md:p-8">
-      <div className="pointer-events-auto w-full max-w-4xl bg-[#101821]/95 border border-[#d4aa54]/40 rounded-2xl p-6 md:p-8 shadow-2xl grid grid-cols-1 md:grid-cols-12 gap-8">
+      <div className="pointer-events-auto w-full max-w-4xl bg-[#101821]/95 border border-[#d4aa54]/45 rounded-2xl p-6 md:p-8 shadow-2xl grid grid-cols-1 md:grid-cols-12 gap-8">
         {/* Left: QR Code & PIN */}
-        <div className="md:col-span-5 flex flex-col items-center justify-between bg-[#16212d] border border-[#d4aa54]/25 rounded-xl p-6 text-center">
-          <div className="flex items-center gap-2.5">
-            <IsleholdCrest className="w-9 h-9" />
+        <div className="md:col-span-5 flex flex-col items-center justify-between bg-[#15202c] border border-[#d4aa54]/25 rounded-xl p-6 text-center">
+          <div className="flex items-center gap-3">
+            <IsleholdCrest className="w-10 h-10" />
             <div className="text-left">
               <div className="font-display text-lg font-bold tracking-wide text-[#f7eed7]">
                 TV Table Lobby
@@ -49,7 +49,7 @@ export function TVLobby() {
             </div>
           </div>
 
-          <div className="my-5 bg-[#f5efe2] p-3 rounded-xl shadow-inner">
+          <div className="my-5 bg-[#f5efe2] p-3 rounded-xl shadow-inner border border-[#d4aa54]/40">
             {qrSvg ? (
               <img
                 src={qrSvg}
@@ -98,7 +98,7 @@ export function TVLobby() {
                 <button
                   type="button"
                   onClick={() => sendMessage({ type: 'ADD_BOT', roomId: room.roomId })}
-                  className="min-h-[40px] px-3.5 py-2 rounded-lg bg-[#1d2b3a] hover:bg-[#27394d] border border-[#d4aa54]/30 text-xs font-medium text-[#f5efe2] flex items-center gap-1.5 cursor-pointer"
+                  className="min-h-[40px] px-3.5 py-2 rounded-lg bg-[#1d2b3a] hover:bg-[#27394d] border border-[#d4aa54]/30 text-xs font-medium text-[#f5efe2] flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
                 >
                   <Bot className="w-3.5 h-3.5 text-[#d4aa54]" />
                   Add AI Rival
@@ -232,7 +232,7 @@ export function TVLobby() {
               type="button"
               disabled={!canStart}
               onClick={() => sendMessage({ type: 'START_GAME', roomId: room.roomId })}
-              className="flex-1 min-h-[48px] px-6 py-3 rounded-xl bg-[#b88635] hover:bg-[#cc9842] disabled:opacity-45 text-[#14100a] font-semibold text-sm flex items-center justify-center gap-2 cursor-pointer transition-colors"
+              className="flex-1 min-h-[48px] px-6 py-3 rounded-xl bg-[#b88635] hover:bg-[#cc9842] disabled:opacity-45 text-[#14100a] font-semibold text-sm flex items-center justify-center gap-2 cursor-pointer transition-colors whitespace-nowrap"
             >
               <Play className="w-4 h-4 fill-current" />
               {canStart ? 'Begin Island Match' : 'Need 2+ Players'}

@@ -15,7 +15,7 @@ import {
   getPrivatePlayerState,
   sanitizeStateForPublic,
 } from './src/game/rules';
-import { chooseBotAction } from './src/game/aiBot';
+import { chooseBotAction, evaluateBotTradeResponse } from './src/game/aiBot';
 import type { BoardPreset, FactionColor, GameState } from './src/game/types';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -99,6 +99,41 @@ function scheduleBotStep(room: RoomRecord) {
   if (!room.game || room.game.phase === 'finished') return;
 
   const game = room.game;
+
+  // Check if any bot needs to respond to a pending trade offer during main phase
+  if (game.phase === 'main' && game.activeTradeOffers.length > 0) {
+    for (const offer of game.activeTradeOffers) {
+      const targetBot = game.players.find(
+        (p) =>
+          p.isBot &&
+          p.id !== offer.fromPlayerId &&
+          (!offer.toPlayerId || offer.toPlayerId === p.id) &&
+          !offer.rejectedBy.includes(p.id),
+      );
+      if (targetBot) {
+        room.botTimer = setTimeout(() => {
+          room.botTimer = null;
+          if (!room.game || room.game.phase !== 'main') return;
+          const liveOffer = room.game.activeTradeOffers.find((o) => o.id === offer.id);
+          if (!liveOffer) return;
+          const accept = evaluateBotTradeResponse(room.game, targetBot.id, liveOffer);
+          const result = applyAction(room.game, {
+            type: 'RESPOND_TRADE_OFFER',
+            playerId: targetBot.id,
+            offerId: liveOffer.id,
+            accept,
+          });
+          if (result.ok) {
+            room.game = result.state;
+            broadcastRoom(room);
+            scheduleBotStep(room);
+          }
+        }, 620);
+        return;
+      }
+    }
+  }
+
   let actingBotId: string | null = null;
 
   if (game.phase === 'discard') {
