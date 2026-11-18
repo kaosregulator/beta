@@ -1,0 +1,6 @@
+{
+  "name": "Islehold — Boared Games 3D Island Strategy",
+  "description": "A handcrafted 3D hexagonal island strategy board game for TV hosts and mobile phone controllers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
