@@ -71,6 +71,8 @@ interface GameStore {
   sfxVolume: number;
   ambienceVolume: number;
   placementIntent: PlacementIntent;
+  activeSubDrawer: 'none' | 'trade' | 'cards';
+  showBoardTooltips: boolean;
   cameraCommand: { type: 'reset' | 'top' | 'iso' | 'dice'; seq: number } | null;
 
   setScreen: (screen: AppScreen) => void;
@@ -82,15 +84,18 @@ interface GameStore {
   setSfxVolume: (v: number) => void;
   setAmbienceVolume: (v: number) => void;
   setPlacementIntent: (intent: PlacementIntent) => void;
+  setActiveSubDrawer: (drawer: 'none' | 'trade' | 'cards') => void;
+  setShowBoardTooltips: (show: boolean) => void;
   clearError: () => void;
   triggerCameraCommand: (type: 'reset' | 'top' | 'iso' | 'dice') => void;
 
   connectSocket: () => Promise<void>;
   createRoom: (opts: {
-    mode: 'tv_host' | 'quick_play';
+    mode: 'tv_host' | 'quick_play' | 'tutorial';
     hostName?: string;
     hostColor?: FactionColor;
     preset?: BoardPreset;
+    blindStart?: boolean;
     victoryTarget?: number;
     botCount?: number;
   }) => Promise<void>;
@@ -159,6 +164,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
   sfxVolume: initialAudio.sfxVolume,
   ambienceVolume: initialAudio.ambienceVolume,
   placementIntent: null,
+  activeSubDrawer: 'none',
+  showBoardTooltips: true,
   cameraCommand: null,
 
   setScreen: (screen) => set({ screen }),
@@ -218,6 +225,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       });
     }
   },
+  setActiveSubDrawer: (activeSubDrawer) => set({ activeSubDrawer }),
+  setShowBoardTooltips: (showBoardTooltips) => set({ showBoardTooltips }),
   clearError: () => set({ errorMessage: null }),
   triggerCameraCommand: (type) =>
     set((s) => ({
@@ -319,6 +328,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
           // Audio cues on discrete state changes
           if (prevRoom?.game && nextRoom.game) {
+            if (nextRoom.game.shuffleSeq !== prevRoom.game.shuffleSeq) {
+              tabletopAudio.playTileShuffle();
+            }
+            const prevRevealed = prevRoom.game.hexes.filter((h) => h.revealed).length;
+            const nextRevealed = nextRoom.game.hexes.filter((h) => h.revealed).length;
+            if (nextRevealed > prevRevealed) {
+              tabletopAudio.playTileFlip();
+            }
+
             if (nextRoom.game.diceRollSeq !== prevRoom.game.diceRollSeq) {
               tabletopAudio.playDiceRoll();
               const diceSum = nextRoom.game.dice
@@ -455,6 +473,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       hostName: opts.hostName,
       hostColor: opts.hostColor,
       preset: opts.preset,
+      blindStart: opts.blindStart,
       victoryTarget: opts.victoryTarget,
       botCount: opts.botCount,
     });
@@ -511,6 +530,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       isHost: false,
       privateState: null,
       placementIntent: null,
+      activeSubDrawer: 'none',
       errorMessage: null,
     });
   },

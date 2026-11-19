@@ -21,6 +21,7 @@ function createHexPrismGeometry(
   radius: number,
   depth: number,
   bevel = 0.04,
+  bevelSegments = 3,
 ): THREE.ExtrudeGeometry {
   const shape = new THREE.Shape();
   for (let i = 0; i < 6; i++) {
@@ -37,21 +38,290 @@ function createHexPrismGeometry(
     bevelEnabled: true,
     bevelThickness: bevel,
     bevelSize: bevel,
-    bevelSegments: 2,
+    bevelSegments,
   });
   geo.rotateX(Math.PI / 2);
   return geo;
 }
 
+export interface TerrainElevationProfile {
+  /** Height of the primary sculpted biome base layer */
+  baseDepth: number;
+  /** Radius multiplier & thickness of the middle stepped contour stratum */
+  midLayerScale: number;
+  midLayerHeight: number;
+  /** Radius multiplier & thickness of the upper summit/mesa stratum (0 if none) */
+  upperLayerScale: number;
+  upperLayerHeight: number;
+  /** Amplitude of organic procedural vertex displacement across the top plateau */
+  reliefAmplitude: number;
+  /** Seated world Y for the center number token disc once tile is revealed */
+  revealedTokenY: number;
+  /** Relief generator style */
+  reliefStyle: 'ridges' | 'dunes' | 'meadow' | 'terraced' | 'furrows' | 'forest_rise';
+}
+
+export const DEFAULT_TERRAIN_ELEVATION_PROFILES: Record<
+  TerrainType,
+  TerrainElevationProfile
+> = {
+  mountains: {
+    baseDepth: 0.16,
+    midLayerScale: 0.78,
+    midLayerHeight: 0.085,
+    upperLayerScale: 0.56,
+    upperLayerHeight: 0.095,
+    reliefAmplitude: 0.09,
+    revealedTokenY: 0.48,
+    reliefStyle: 'ridges',
+  },
+  hills: {
+    baseDepth: 0.16,
+    midLayerScale: 0.76,
+    midLayerHeight: 0.075,
+    upperLayerScale: 0.54,
+    upperLayerHeight: 0.068,
+    reliefAmplitude: 0.048,
+    revealedTokenY: 0.445,
+    reliefStyle: 'terraced',
+  },
+  forest: {
+    baseDepth: 0.16,
+    midLayerScale: 0.74,
+    midLayerHeight: 0.06,
+    upperLayerScale: 0.52,
+    upperLayerHeight: 0.045,
+    reliefAmplitude: 0.04,
+    revealedTokenY: 0.415,
+    reliefStyle: 'forest_rise',
+  },
+  pasture: {
+    baseDepth: 0.16,
+    midLayerScale: 0.8,
+    midLayerHeight: 0.042,
+    upperLayerScale: 0,
+    upperLayerHeight: 0,
+    reliefAmplitude: 0.075,
+    revealedTokenY: 0.375,
+    reliefStyle: 'meadow',
+  },
+  fields: {
+    baseDepth: 0.16,
+    midLayerScale: 0.72,
+    midLayerHeight: 0.048,
+    upperLayerScale: 0,
+    upperLayerHeight: 0,
+    reliefAmplitude: 0.032,
+    revealedTokenY: 0.382,
+    reliefStyle: 'furrows',
+  },
+  desert: {
+    baseDepth: 0.15,
+    midLayerScale: 0.78,
+    midLayerHeight: 0.035,
+    upperLayerScale: 0,
+    upperLayerHeight: 0,
+    reliefAmplitude: 0.085,
+    revealedTokenY: 0.37,
+    reliefStyle: 'dunes',
+  },
+};
+
+export interface TerrainMeshFidelityConfig {
+  subdivisionRings: number;
+  secondaryNoiseWeight: number;
+  perTileElevationVariance: number;
+  cliffSkirtSteps: number;
+  vertexColorVariation: number;
+}
+
+export const DEFAULT_TERRAIN_MESH_FIDELITY: TerrainMeshFidelityConfig = {
+  subdivisionRings: 10,
+  secondaryNoiseWeight: 0.36,
+  perTileElevationVariance: 0.045,
+  cliffSkirtSteps: 2,
+  vertexColorVariation: 0.16,
+};
+
+/**
+ * Generates a high-density subdivided hexagonal relief surface mesh with
+ * multi-octave procedural elevation contours, per-tile height variance, and
+ * subtle crevice/crest vertex shading while keeping edges & token centers flush.
+ */
+function createSculptedHexReliefGeometry(
+  radius: number,
+  profile: TerrainElevationProfile,
+  seedStr: string,
+  fidelity: TerrainMeshFidelityConfig = DEFAULT_TERRAIN_MESH_FIDELITY,
+): THREE.BufferGeometry {
+  const rng = makeSeededRng(seedStr);
+  const phaseA = rng() * Math.PI * 2;
+  const phaseB = rng() * Math.PI * 2;
+  const phaseC = rng() * Math.PI * 2;
+  const tileLift = (rng() - 0.35) * fidelity.perTileElevationVariance;
+  const rings = Math.max(6, Math.min(14, Math.round(fidelity.subdivisionRings)));
+  const sectors = 6;
+
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const colors: number[] = [];
+  const indices: number[] = [];
+
+  const evalHeight = (x: number, z: number, normR: number): { y: number; shade: number } => {
+    // Taper displacement smoothly to 0 at outer hex edge and keep center token pedestal flat
+    const edgeFade = Math.max(0, Math.min(1, (1 - normR) * 3.4));
+    const centerSeat = normR < 0.34 ? 0.05 : Math.min(1, (normR - 0.34) / 0.24);
+    const mask = edgeFade * centerSeat;
+    const amp = profile.reliefAmplitude * mask;
+
+    // 2nd-octave geological micro-ridge variation for handcrafted tactile detail
+    const oct2 =
+      (Math.sin(x * 7.2 + z * 5.4 + phaseC) * 0.5 +
+        Math.cos(z * 8.1 - x * 6.3 + phaseA) * 0.5) *
+      0.5 +
+      0.5;
+    const secWeight = fidelity.secondaryNoiseWeight;
+    let primary = 0.5;
+
+    if (profile.reliefStyle === 'dunes') {
+      const wave =
+        Math.sin(x * 3.8 + z * 1.6 + phaseA) * 0.58 +
+        Math.cos(x * 2.1 - z * 3.4 + phaseB) * 0.42;
+      const windCrest = Math.pow(Math.max(0, wave * 0.5 + 0.55), 1.25);
+      primary = windCrest;
+    } else if (profile.reliefStyle === 'meadow') {
+      const swell =
+        Math.sin(x * 2.5 + phaseA) * Math.cos(z * 2.4 + phaseB) * 0.65 +
+        Math.sin((x + z) * 3.3 + phaseC) * 0.35;
+      primary = Math.max(0, swell * 0.5 + 0.52);
+    } else if (profile.reliefStyle === 'ridges') {
+      const ridge =
+        Math.abs(Math.sin(x * 3.2 + z * 2.2 + phaseA)) * 0.62 +
+        Math.abs(Math.cos(z * 4.0 - x * 1.7 + phaseB)) * 0.38;
+      primary = ridge * 1.05;
+    } else if (profile.reliefStyle === 'terraced') {
+      const raw =
+        Math.sin(x * 2.3 + phaseA) * 0.48 +
+        Math.cos(z * 2.6 + phaseB) * 0.48 +
+        (1 - normR) * 0.72;
+      const stepped = Math.round(raw * 4.0) / 4.0;
+      primary = Math.max(0, stepped);
+    } else if (profile.reliefStyle === 'furrows') {
+      const furrow = Math.sin(z * 12.2 + x * 0.8) * 0.5 + 0.5;
+      primary = furrow;
+    } else {
+      // forest_rise
+      const knoll =
+        Math.sin(x * 2.8 + phaseA) * 0.42 +
+        Math.cos(z * 3.0 + phaseB) * 0.42 +
+        0.58;
+      primary = Math.max(0, knoll);
+    }
+
+    const combined = primary * (1 - secWeight * 0.4) + oct2 * secWeight;
+    const height = Math.max(0, combined * amp + Math.max(-0.01, tileLift) * mask);
+    const colorDelta = (combined - 0.55) * fidelity.vertexColorVariation;
+    const shade = Math.max(0.78, Math.min(1.16, 1 + colorDelta));
+    return { y: height, shade };
+  };
+
+  // Center vertex (0)
+  const centerSample = evalHeight(0, 0, 0);
+  positions.push(0, centerSample.y, 0);
+  uvs.push(0.5, 0.5);
+  colors.push(centerSample.shade, centerSample.shade, centerSample.shade);
+
+  const ringStartIdx: number[] = [];
+  for (let r = 1; r <= rings; r++) {
+    ringStartIdx.push(positions.length / 3);
+    const t = r / rings;
+    const rad = radius * t;
+    const ptsInRing = sectors * r;
+
+    for (let s = 0; s < sectors; s++) {
+      const a0 = (Math.PI / 180) * (60 * s - 30);
+      const a1 = (Math.PI / 180) * (60 * ((s + 1) % 6) - 30);
+      const x0 = rad * Math.cos(a0);
+      const z0 = rad * Math.sin(a0);
+      const x1 = rad * Math.cos(a1);
+      const z1 = rad * Math.sin(a1);
+
+      for (let sub = 0; sub < r; sub++) {
+        const f = sub / r;
+        const px = x0 + (x1 - x0) * f;
+        const pz = z0 + (z1 - z0) * f;
+        const sample = evalHeight(px, pz, t);
+        positions.push(px, sample.y, pz);
+        uvs.push(0.5 + px / (radius * 2.2), 0.5 + pz / (radius * 2.2));
+        colors.push(sample.shade, sample.shade, sample.shade);
+      }
+    }
+    void ptsInRing;
+  }
+
+  // Inner fan triangles (center -> ring 1)
+  const r1Start = ringStartIdx[0];
+  for (let s = 0; s < sectors; s++) {
+    const next = (s + 1) % sectors;
+    indices.push(0, r1Start + next, r1Start + s);
+  }
+
+  // Stitch concentric rings (r to r+1)
+  for (let r = 1; r < rings; r++) {
+    const innerStart = ringStartIdx[r - 1];
+    const outerStart = ringStartIdx[r];
+    const innerCount = sectors * r;
+    const outerCount = sectors * (r + 1);
+
+    for (let s = 0; s < sectors; s++) {
+      for (let k = 0; k < r; k++) {
+        const i0 = innerStart + ((s * r + k) % innerCount);
+        const i1 = innerStart + ((s * r + k + 1) % innerCount);
+        const o0 = outerStart + ((s * (r + 1) + k) % outerCount);
+        const o1 = outerStart + ((s * (r + 1) + k + 1) % outerCount);
+        indices.push(i0, o1, o0);
+        indices.push(i0, i1, o1);
+      }
+      // Corner triangle at end of sector
+      const iCorner = innerStart + (((s + 1) * r) % innerCount);
+      const oA = outerStart + ((s * (r + 1) + r) % outerCount);
+      const oB = outerStart + (((s + 1) * (r + 1)) % outerCount);
+      indices.push(iCorner, oB, oA);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
 export interface TerrainTileBuildResult {
+  hexId: string;
+  revealed: boolean;
   group: THREE.Group;
+  flipPivot: THREE.Group;
+  biomeGroup: THREE.Group;
+  plainBackGroup: THREE.Group;
+  tokenMountGroup: THREE.Group;
+  unrevealedTokenY: number;
+  revealedTokenY: number;
   swayTrees: THREE.Object3D[];
   windmills: THREE.Object3D[];
+  disposeCustomGeometries: () => void;
 }
 
 export interface TerrainAssets {
   baseGeo: THREE.ExtrudeGeometry;
   rimGeo: THREE.ExtrudeGeometry;
+  terraceGeo: THREE.ExtrudeGeometry;
+  upperTerraceGeo: THREE.ExtrudeGeometry;
+  plainBackGeo: THREE.ExtrudeGeometry;
+  plainTrimGeo: THREE.RingGeometry;
+  furrowGeo: THREE.BoxGeometry;
   tokenGeo: THREE.CylinderGeometry;
   tokenFaceGeo: THREE.CircleGeometry;
   treeTrunkGeo: THREE.CylinderGeometry;
@@ -66,7 +336,10 @@ export interface TerrainAssets {
   fenceRailGeo: THREE.BoxGeometry;
   materials: {
     rimEarth: THREE.MeshStandardMaterial;
+    plainTileBack: THREE.MeshStandardMaterial;
+    plainTileTrim: THREE.MeshStandardMaterial;
     terrainTop: Record<TerrainType, THREE.MeshStandardMaterial>;
+    terrainRelief: Record<TerrainType, THREE.MeshStandardMaterial>;
     bark: THREE.MeshStandardMaterial;
     pineLeaves: THREE.MeshStandardMaterial[];
     fernGreen: THREE.MeshStandardMaterial;
@@ -89,49 +362,83 @@ export interface TerrainAssets {
     cactusGreen: THREE.MeshStandardMaterial;
     oasisWater: THREE.MeshStandardMaterial;
     tokenBrass: THREE.MeshStandardMaterial;
+    tilledSoil: THREE.MeshStandardMaterial;
+    coastalShelf: THREE.MeshStandardMaterial;
   };
   dispose: () => void;
 }
 
 export function createTerrainAssets(textures: ProceduralTextureSet): TerrainAssets {
-  const baseGeo = createHexPrismGeometry(HEX_RADIUS * 0.965, 0.22, 0.035);
-  const rimGeo = createHexPrismGeometry(HEX_RADIUS * 0.99, 0.28, 0.025);
+  const baseGeo = createHexPrismGeometry(HEX_RADIUS * 0.905, 0.14, 0.048, 3);
+  const rimGeo = createHexPrismGeometry(HEX_RADIUS * 0.985, 0.36, 0.045, 3);
+  const terraceGeo = createHexPrismGeometry(HEX_RADIUS * 0.74, 0.052, 0.032, 2);
+  const upperTerraceGeo = createHexPrismGeometry(HEX_RADIUS * 0.52, 0.05, 0.026, 2);
+  const plainBackGeo = createHexPrismGeometry(HEX_RADIUS * 0.905, 0.068, 0.032, 3);
+  const plainTrimGeo = new THREE.RingGeometry(HEX_RADIUS * 0.69, HEX_RADIUS * 0.74, 6);
+  plainTrimGeo.rotateX(Math.PI / 2);
+  const furrowGeo = new THREE.BoxGeometry(1.32, 0.028, 0.105);
   const tokenGeo = new THREE.CylinderGeometry(0.425, 0.445, 0.072, 28);
   const tokenFaceGeo = new THREE.CircleGeometry(0.39, 28);
-  const treeTrunkGeo = new THREE.CylinderGeometry(0.03, 0.06, 0.26, 7);
+  const treeTrunkGeo = new THREE.CylinderGeometry(0.03, 0.072, 0.28, 7);
   const treeConeGeo = new THREE.ConeGeometry(0.22, 0.24, 7);
   const fernGeo = new THREE.ConeGeometry(0.085, 0.09, 5);
   const flowerGeo = new THREE.SphereGeometry(0.028, 6, 5);
   const wheatStalkGeo = new THREE.CylinderGeometry(0.015, 0.022, 0.24, 5);
   const wheatHeadGeo = new THREE.ConeGeometry(0.042, 0.12, 5);
-  const boulderGeo = new THREE.DodecahedronGeometry(0.09, 0);
+  const boulderGeo = new THREE.DodecahedronGeometry(0.095, 0);
   const brickGeo = new THREE.BoxGeometry(0.11, 0.055, 0.065);
   const fencePostGeo = new THREE.BoxGeometry(0.035, 0.14, 0.035);
   const fenceRailGeo = new THREE.BoxGeometry(0.54, 0.024, 0.02);
 
   const terrainTop = {} as Record<TerrainType, THREE.MeshStandardMaterial>;
+  const terrainRelief = {} as Record<TerrainType, THREE.MeshStandardMaterial>;
   (['forest', 'pasture', 'fields', 'hills', 'mountains', 'desert'] as TerrainType[]).forEach(
     (t) => {
       terrainTop[t] = new THREE.MeshStandardMaterial({
         map: textures.terrainMaps[t],
         normalMap: textures.terrainNormal,
-        normalScale: new THREE.Vector2(0.7, 0.7),
+        normalScale: new THREE.Vector2(0.85, 0.85),
         roughnessMap: textures.terrainRoughness,
         roughness: t === 'desert' ? 0.92 : 0.84,
         metalness: 0.03,
+      });
+      terrainRelief[t] = new THREE.MeshStandardMaterial({
+        map: textures.terrainMaps[t],
+        normalMap: textures.terrainNormal,
+        normalScale: new THREE.Vector2(0.92, 0.92),
+        roughnessMap: textures.terrainRoughness,
+        roughness: t === 'desert' ? 0.92 : 0.84,
+        metalness: 0.03,
+        vertexColors: true,
       });
     },
   );
 
   const materials = {
     rimEarth: new THREE.MeshStandardMaterial({
-      color: 0x594735,
+      color: 0x5c4b3c,
+      map: textures.stoneMasonry,
       roughness: 0.9,
-      metalness: 0.02,
+      metalness: 0.04,
+      normalMap: textures.stoneMasonryNormal,
+      normalScale: new THREE.Vector2(0.9, 0.9),
+    }),
+    plainTileBack: new THREE.MeshStandardMaterial({
+      color: 0xdacdb2,
+      map: textures.plainTileBack,
       normalMap: textures.terrainNormal,
-      normalScale: new THREE.Vector2(0.85, 0.85),
+      normalScale: new THREE.Vector2(0.3, 0.3),
+      roughness: 0.82,
+      metalness: 0.03,
+    }),
+    plainTileTrim: new THREE.MeshStandardMaterial({
+      color: 0x8f744c,
+      roughness: 0.72,
+      metalness: 0.08,
+      side: THREE.DoubleSide,
     }),
     terrainTop,
+    terrainRelief,
     bark: new THREE.MeshStandardMaterial({
       color: 0x4d311f,
       roughness: 0.9,
@@ -148,6 +455,8 @@ export function createTerrainAssets(textures: ProceduralTextureSet): TerrainAsse
       color: 0x747b82,
       roughness: 0.86,
       metalness: 0.08,
+      normalMap: textures.terrainNormal,
+      normalScale: new THREE.Vector2(0.7, 0.7),
       flatShading: true,
     }),
     rockDark: new THREE.MeshStandardMaterial({
@@ -171,6 +480,8 @@ export function createTerrainAssets(textures: ProceduralTextureSet): TerrainAsse
     clayRed: new THREE.MeshStandardMaterial({
       color: 0xa64a30,
       roughness: 0.84,
+      normalMap: textures.terrainNormal,
+      normalScale: new THREE.Vector2(0.75, 0.75),
       flatShading: true,
     }),
     clayBrick: new THREE.MeshStandardMaterial({
@@ -219,11 +530,29 @@ export function createTerrainAssets(textures: ProceduralTextureSet): TerrainAsse
       roughness: 0.28,
       metalness: 0.82,
     }),
+    tilledSoil: new THREE.MeshStandardMaterial({
+      color: 0x9e712c,
+      roughness: 0.94,
+      normalMap: textures.terrainNormal,
+      normalScale: new THREE.Vector2(0.8, 0.8),
+    }),
+    coastalShelf: new THREE.MeshStandardMaterial({
+      color: 0x7c7467,
+      roughness: 0.92,
+      normalMap: textures.stoneMasonryNormal,
+      normalScale: new THREE.Vector2(0.65, 0.65),
+      flatShading: true,
+    }),
   };
 
   return {
     baseGeo,
     rimGeo,
+    terraceGeo,
+    upperTerraceGeo,
+    plainBackGeo,
+    plainTrimGeo,
+    furrowGeo,
     tokenGeo,
     tokenFaceGeo,
     treeTrunkGeo,
@@ -240,6 +569,11 @@ export function createTerrainAssets(textures: ProceduralTextureSet): TerrainAsse
     dispose: () => {
       baseGeo.dispose();
       rimGeo.dispose();
+      terraceGeo.dispose();
+      upperTerraceGeo.dispose();
+      plainBackGeo.dispose();
+      plainTrimGeo.dispose();
+      furrowGeo.dispose();
       tokenGeo.dispose();
       tokenFaceGeo.dispose();
       treeTrunkGeo.dispose();
@@ -253,7 +587,10 @@ export function createTerrainAssets(textures: ProceduralTextureSet): TerrainAsse
       fencePostGeo.dispose();
       fenceRailGeo.dispose();
       Object.values(terrainTop).forEach((m) => m.dispose());
+      Object.values(terrainRelief).forEach((m) => m.dispose());
       materials.rimEarth.dispose();
+      materials.plainTileBack.dispose();
+      materials.plainTileTrim.dispose();
       materials.bark.dispose();
       materials.pineLeaves.forEach((m) => m.dispose());
       materials.fernGreen.dispose();
@@ -276,6 +613,8 @@ export function createTerrainAssets(textures: ProceduralTextureSet): TerrainAsse
       materials.cactusGreen.dispose();
       materials.oasisWater.dispose();
       materials.tokenBrass.dispose();
+      materials.tilledSoil.dispose();
+      materials.coastalShelf.dispose();
     },
   };
 }
@@ -450,50 +789,153 @@ function addMountainPeak(
 const _dummyObj = new THREE.Object3D();
 
 /**
- * Builds a complete, handcrafted 3D hexagonal terrain tile Group with instanced
- * biome flora, animated tree/windmill refs, and brass/parchment number token disc.
+ * Builds a complete, handcrafted 3D hexagonal terrain tile Group with multi-layered
+ * procedural elevation strata, sculpted relief surface, plain flip-back face,
+ * instanced biome flora, and brass/parchment number token disc.
  */
 export function buildHexTileGroup(
   hex: HexTile,
   assets: TerrainAssets,
   textures: ProceduralTextureSet,
+  elevationProfiles: Record<TerrainType, TerrainElevationProfile> = DEFAULT_TERRAIN_ELEVATION_PROFILES,
+  meshFidelity: TerrainMeshFidelityConfig = DEFAULT_TERRAIN_MESH_FIDELITY,
 ): TerrainTileBuildResult {
   const group = new THREE.Group();
+  const tileElevationJitter =
+    (makeSeededRng(`${hex.id}_plinth`)() - 0.45) * meshFidelity.perTileElevationVariance * 0.45;
   group.position.set(hex.x, 0, hex.z);
   const rng = makeSeededRng(`${hex.id}_${hex.terrain}`);
   const swayTrees: THREE.Object3D[] = [];
   const windmills: THREE.Object3D[] = [];
+  const customGeometries: THREE.BufferGeometry[] = [];
+  const customMaterials: THREE.Material[] = [];
+  const profile = elevationProfiles[hex.terrain] ?? DEFAULT_TERRAIN_ELEVATION_PROFILES[hex.terrain];
 
-  // 1. Stone/earth beveled rim plinth
+  // 1. Stationary carved stone/earth island plinth rising out of ocean
   const rim = new THREE.Mesh(assets.rimGeo, assets.materials.rimEarth);
-  rim.position.y = 0.14;
+  rim.position.y = 0.2 + tileElevationJitter * 0.5;
   rim.receiveShadow = true;
   rim.castShadow = true;
   group.add(rim);
 
-  // 2. Biome top cap
+  // Coastal shoal ledges around the outer perimeter hexes for grounded cliff-to-sea silhouette
+  const isCoastal =
+    Math.abs(hex.q) === 2 || Math.abs(hex.r) === 2 || Math.abs(hex.q + hex.r) === 2;
+  if (isCoastal) {
+    const outAng = Math.atan2(hex.z, hex.x);
+    for (const offset of [-0.26, 0.26]) {
+      const shoal = new THREE.Mesh(assets.boulderGeo, assets.materials.coastalShelf);
+      shoal.position.set(
+        Math.cos(outAng + offset) * (HEX_RADIUS * 0.95),
+        -0.01,
+        Math.sin(outAng + offset) * (HEX_RADIUS * 0.95),
+      );
+      shoal.scale.set(2.6, 0.28, 1.35);
+      shoal.rotation.y = outAng + offset;
+      shoal.receiveShadow = true;
+      group.add(shoal);
+    }
+  }
+
+  // 2. Flip Pivot containing both the plain tabletop tile-back and the sculpted elevated biome
+  const flipPivot = new THREE.Group();
+  flipPivot.position.y = 0.285;
+  flipPivot.rotation.x = hex.revealed ? 0 : Math.PI;
+  group.add(flipPivot);
+
+  // 2a. Plain upside-down tabletop tile back (faces +Y when flipPivot.rotation.x === Math.PI)
+  const plainBackGroup = new THREE.Group();
+  const backSlab = new THREE.Mesh(assets.plainBackGeo, assets.materials.plainTileBack);
+  backSlab.rotation.x = Math.PI;
+  backSlab.position.y = -0.025;
+  backSlab.castShadow = true;
+  backSlab.receiveShadow = true;
+  plainBackGroup.add(backSlab);
+
+  const backTrim = new THREE.Mesh(assets.plainTrimGeo, assets.materials.plainTileTrim);
+  backTrim.position.y = -0.0585;
+  backTrim.receiveShadow = true;
+  plainBackGroup.add(backTrim);
+  flipPivot.add(plainBackGroup);
+
+  // 2b. Right-side-up Elevated Biome Assembly (hidden while flipped upside-down)
+  const biomeGroup = new THREE.Group();
+  biomeGroup.position.y = tileElevationJitter;
+  biomeGroup.visible = hex.revealed;
+  flipPivot.add(biomeGroup);
+
+  // Layer 1: Chamfered primary biome base shelf + secondary geological cliff skirt
   const topCap = new THREE.Mesh(assets.baseGeo, assets.materials.terrainTop[hex.terrain]);
-  topCap.position.y = 0.21;
+  topCap.position.y = -0.015;
+  topCap.castShadow = true;
   topCap.receiveShadow = true;
-  group.add(topCap);
+  biomeGroup.add(topCap);
 
-  const surfaceY = 0.245;
+  if (meshFidelity.cliffSkirtSteps >= 2) {
+    const skirtShelf = new THREE.Mesh(assets.terraceGeo, assets.materials.rimEarth);
+    skirtShelf.position.y = -0.028;
+    skirtShelf.scale.set(1.16, 0.58, 1.16);
+    skirtShelf.receiveShadow = true;
+    biomeGroup.add(skirtShelf);
+  }
 
-  const ringAngles = [0, 1, 2, 3, 4, 5, 6, 7, 8].map(
-    (i) => (i / 9) * Math.PI * 2 + rng() * 0.28,
+  // Layer 2: High-density procedural sculpted height-relief surface mesh across the hex plateau
+  const reliefGeo = createSculptedHexReliefGeometry(
+    HEX_RADIUS * 0.895,
+    profile,
+    `${hex.id}_${hex.terrain}_relief`,
+    meshFidelity,
+  );
+  customGeometries.push(reliefGeo);
+  const reliefMesh = new THREE.Mesh(reliefGeo, assets.materials.terrainRelief[hex.terrain]);
+  reliefMesh.position.y = 0.032;
+  reliefMesh.castShadow = true;
+  reliefMesh.receiveShadow = true;
+  biomeGroup.add(reliefMesh);
+
+  // Local Y inside flipPivot (world Y = 0.285 + localY when upright)
+  const baseSurfaceY = 0.035;
+
+  const ringAngles = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(
+    (i) => (i / 10) * Math.PI * 2 + rng() * 0.24,
   );
 
   if (hex.terrain === 'forest') {
+    // Mid woodland humus rise + upper mossy grove terrace
+    const midTerrace = new THREE.Mesh(
+      assets.terraceGeo,
+      assets.materials.terrainTop.forest,
+    );
+    midTerrace.position.y = baseSurfaceY + 0.028;
+    midTerrace.scale.set(
+      profile.midLayerScale / 0.74,
+      profile.midLayerHeight / 0.052,
+      profile.midLayerScale / 0.74,
+    );
+    midTerrace.receiveShadow = true;
+    midTerrace.castShadow = true;
+    biomeGroup.add(midTerrace);
+
+    const upperGrove = new THREE.Mesh(
+      assets.upperTerraceGeo,
+      assets.materials.terrainTop.forest,
+    );
+    upperGrove.position.y = baseSurfaceY + 0.068;
+    upperGrove.castShadow = true;
+    upperGrove.receiveShadow = true;
+    biomeGroup.add(upperGrove);
+
+    const treeSurfaceY = baseSurfaceY + 0.058;
     ringAngles.forEach((ang, i) => {
-      const dist = i % 2 === 0 ? 0.86 + rng() * 0.22 : 0.66 + rng() * 0.18;
+      const dist = i % 2 === 0 ? 0.84 + rng() * 0.18 : 0.62 + rng() * 0.16;
       const tx = Math.cos(ang) * dist;
       const tz = Math.sin(ang) * dist;
       const tree = addMultiSpeciesPineTree(
-        group,
+        biomeGroup,
         tx,
-        surfaceY,
+        dist < 0.72 ? treeSurfaceY + 0.028 : treeSurfaceY,
         tz,
-        0.74 + rng() * 0.46,
+        0.78 + rng() * 0.48,
         i % 3 === 0 ? 'cedar' : 'spruce',
         assets,
         rng,
@@ -506,12 +948,12 @@ export function buildHexTileGroup(
     log.rotation.z = Math.PI / 2;
     log.rotation.y = rng() * Math.PI;
     log.scale.set(1.2, 1.4, 1.2);
-    log.position.set(-0.52, surfaceY + 0.04, 0.56);
+    log.position.set(-0.52, treeSurfaceY + 0.04, 0.56);
     log.castShadow = true;
-    group.add(log);
+    biomeGroup.add(log);
 
     // Instanced forest undergrowth ferns + boulders
-    const fernCount = 16;
+    const fernCount = 18;
     const ferns = new THREE.InstancedMesh(
       assets.fernGeo,
       assets.materials.fernGreen,
@@ -519,42 +961,45 @@ export function buildHexTileGroup(
     );
     for (let i = 0; i < fernCount; i++) {
       const ang = rng() * Math.PI * 2;
-      const d = 0.54 + rng() * 0.65;
-      _dummyObj.position.set(Math.cos(ang) * d, surfaceY + 0.04, Math.sin(ang) * d);
+      const d = 0.52 + rng() * 0.64;
+      _dummyObj.position.set(
+        Math.cos(ang) * d,
+        treeSurfaceY + (d < 0.72 ? 0.05 : 0.025),
+        Math.sin(ang) * d,
+      );
       _dummyObj.rotation.set(0, rng() * Math.PI * 2, 0);
       _dummyObj.scale.setScalar(0.8 + rng() * 0.65);
       _dummyObj.updateMatrix();
       ferns.setMatrixAt(i, _dummyObj.matrix);
     }
     ferns.instanceMatrix.needsUpdate = true;
-    group.add(ferns);
+    biomeGroup.add(ferns);
 
     for (let i = 0; i < 4; i++) {
       const ang = rng() * Math.PI * 2;
       const d = 0.58 + rng() * 0.55;
       const rock = new THREE.Mesh(assets.boulderGeo, assets.materials.rockGrey);
-      rock.position.set(Math.cos(ang) * d, surfaceY + 0.03, Math.sin(ang) * d);
+      rock.position.set(Math.cos(ang) * d, baseSurfaceY + 0.04, Math.sin(ang) * d);
       rock.scale.set(0.8 + rng() * 0.5, 0.55, 0.8 + rng() * 0.5);
-      group.add(rock);
+      biomeGroup.add(rock);
     }
   } else if (hex.terrain === 'pasture') {
-    for (let i = 0; i < 3; i++) {
-      const ang = (i / 3) * Math.PI * 2 + 0.4;
-      const knoll = new THREE.Mesh(
-        new THREE.SphereGeometry(0.55, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
-        assets.materials.terrainTop.pasture,
-      );
-      knoll.scale.set(1.12, 0.25, 0.92);
-      knoll.position.set(Math.cos(ang) * 0.68, surfaceY - 0.02, Math.sin(ang) * 0.68);
-      knoll.receiveShadow = true;
-      group.add(knoll);
-    }
+    // Raised central grassy meadow shelf on top of the sculpted undulating swells
+    const meadowShelf = new THREE.Mesh(
+      assets.terraceGeo,
+      assets.materials.terrainTop.pasture,
+    );
+    meadowShelf.position.y = baseSurfaceY + 0.018;
+    meadowShelf.scale.set(0.95, 0.78, 0.95);
+    meadowShelf.receiveShadow = true;
+    meadowShelf.castShadow = true;
+    biomeGroup.add(meadowShelf);
 
     [0.45, 2.35, 4.35].forEach((ang) => {
       addGrazingSheep(
-        group,
+        biomeGroup,
         Math.cos(ang) * 0.8,
-        surfaceY + 0.02,
+        baseSurfaceY + 0.032,
         Math.sin(ang) * 0.8,
         rng() * Math.PI * 2,
         assets,
@@ -563,7 +1008,7 @@ export function buildHexTileGroup(
 
     // Split-rail pasture fence
     const fence = new THREE.Group();
-    fence.position.set(-0.72, surfaceY, 0.55);
+    fence.position.set(-0.72, baseSurfaceY + 0.02, 0.55);
     fence.rotation.y = 0.6;
     for (const fx of [-0.25, 0, 0.25]) {
       const post = new THREE.Mesh(assets.fencePostGeo, assets.materials.fenceWood);
@@ -575,7 +1020,7 @@ export function buildHexTileGroup(
       rail.position.set(0, ry, 0);
       fence.add(rail);
     }
-    group.add(fence);
+    biomeGroup.add(fence);
 
     // Instanced meadow wildflowers (yellow & white)
     const countPerColor = 12;
@@ -593,7 +1038,11 @@ export function buildHexTileGroup(
       for (const mesh of [yellowFlowers, whiteFlowers]) {
         const ang = rng() * Math.PI * 2;
         const d = 0.5 + rng() * 0.68;
-        _dummyObj.position.set(Math.cos(ang) * d, surfaceY + 0.025, Math.sin(ang) * d);
+        _dummyObj.position.set(
+          Math.cos(ang) * d,
+          baseSurfaceY + 0.042,
+          Math.sin(ang) * d,
+        );
         _dummyObj.rotation.set(0, 0, 0);
         _dummyObj.scale.setScalar(0.85 + rng() * 0.5);
         _dummyObj.updateMatrix();
@@ -602,10 +1051,28 @@ export function buildHexTileGroup(
     }
     yellowFlowers.instanceMatrix.needsUpdate = true;
     whiteFlowers.instanceMatrix.needsUpdate = true;
-    group.add(yellowFlowers, whiteFlowers);
+    biomeGroup.add(yellowFlowers, whiteFlowers);
   } else if (hex.terrain === 'fields') {
+    // Raised farmland terrace + sculpted earthen plow-furrow ridges
+    const farmTerrace = new THREE.Mesh(
+      assets.terraceGeo,
+      assets.materials.terrainTop.fields,
+    );
+    farmTerrace.position.y = baseSurfaceY + 0.022;
+    farmTerrace.scale.set(0.98, 0.85, 0.98);
+    farmTerrace.receiveShadow = true;
+    farmTerrace.castShadow = true;
+    biomeGroup.add(farmTerrace);
+
+    for (const fz of [-0.72, -0.44, 0.44, 0.72]) {
+      const furrow = new THREE.Mesh(assets.furrowGeo, assets.materials.tilledSoil);
+      furrow.position.set(0, baseSurfaceY + 0.036, fz);
+      furrow.receiveShadow = true;
+      biomeGroup.add(furrow);
+    }
+
     // High-density instanced golden wheat stalks & ears
-    const stalkCount = 48;
+    const stalkCount = 54;
     const stalks = new THREE.InstancedMesh(
       assets.wheatStalkGeo,
       assets.materials.wheatGold,
@@ -620,23 +1087,23 @@ export function buildHexTileGroup(
     heads.castShadow = true;
 
     let idx = 0;
-    for (let row = 0; row < 8; row++) {
-      const ang = (row / 8) * Math.PI * 2;
-      const cx = Math.cos(ang) * 0.84;
-      const cz = Math.sin(ang) * 0.84;
+    for (let row = 0; row < 9; row++) {
+      const ang = (row / 9) * Math.PI * 2;
+      const cx = Math.cos(ang) * 0.82;
+      const cz = Math.sin(ang) * 0.82;
       for (let s = 0; s < 6; s++) {
         const sx = cx + (rng() - 0.5) * 0.34;
         const sz = cz + (rng() - 0.5) * 0.34;
-        const tiltX = (rng() - 0.5) * 0.2;
-        const tiltZ = (rng() - 0.5) * 0.2;
+        const tiltX = (rng() - 0.5) * 0.22;
+        const tiltZ = (rng() - 0.5) * 0.22;
 
-        _dummyObj.position.set(sx, surfaceY + 0.12, sz);
+        _dummyObj.position.set(sx, baseSurfaceY + 0.145, sz);
         _dummyObj.rotation.set(tiltX, rng() * Math.PI, tiltZ);
-        _dummyObj.scale.setScalar(0.85 + rng() * 0.3);
+        _dummyObj.scale.setScalar(0.88 + rng() * 0.32);
         _dummyObj.updateMatrix();
         stalks.setMatrixAt(idx, _dummyObj.matrix);
 
-        _dummyObj.position.set(sx - tiltZ * 0.12, surfaceY + 0.25, sz + tiltX * 0.12);
+        _dummyObj.position.set(sx - tiltZ * 0.12, baseSurfaceY + 0.275, sz + tiltX * 0.12);
         _dummyObj.updateMatrix();
         heads.setMatrixAt(idx, _dummyObj.matrix);
         idx++;
@@ -644,66 +1111,91 @@ export function buildHexTileGroup(
     }
     stalks.instanceMatrix.needsUpdate = true;
     heads.instanceMatrix.needsUpdate = true;
-    group.add(stalks, heads);
+    biomeGroup.add(stalks, heads);
 
     // Miniature red farm granary barn + stone-base windmill with rotating sails
     const barn = new THREE.Group();
-    barn.position.set(0.75, surfaceY, -0.56);
+    barn.position.set(0.75, baseSurfaceY + 0.02, -0.56);
     barn.rotation.y = -0.5;
     const bBody = new THREE.Mesh(
-      new THREE.BoxGeometry(0.22, 0.15, 0.18),
+      new THREE.BoxGeometry(0.24, 0.16, 0.19),
       assets.materials.wheatBarn,
     );
-    bBody.position.y = 0.075;
+    bBody.position.y = 0.08;
     bBody.castShadow = true;
     const bRoof = new THREE.Mesh(
-      new THREE.ConeGeometry(0.165, 0.12, 4),
+      new THREE.ConeGeometry(0.18, 0.13, 4),
       assets.materials.fenceWood,
     );
     bRoof.rotation.y = Math.PI / 4;
-    bRoof.position.y = 0.21;
+    bRoof.position.y = 0.22;
     bRoof.castShadow = true;
+    customGeometries.push(bBody.geometry, bRoof.geometry);
     barn.add(bBody, bRoof);
-    group.add(barn);
+    biomeGroup.add(barn);
 
     const mill = new THREE.Group();
-    mill.position.set(-0.74, surfaceY, 0.52);
+    mill.position.set(-0.74, baseSurfaceY + 0.02, 0.52);
     mill.rotation.y = 0.7;
     const millTower = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.065, 0.1, 0.26, 8),
+      new THREE.CylinderGeometry(0.068, 0.105, 0.28, 8),
       assets.materials.rockGrey,
     );
-    millTower.position.y = 0.13;
+    millTower.position.y = 0.14;
     millTower.castShadow = true;
     const millRoof = new THREE.Mesh(
-      new THREE.ConeGeometry(0.08, 0.09, 8),
+      new THREE.ConeGeometry(0.084, 0.095, 8),
       assets.materials.wheatBarn,
     );
-    millRoof.position.y = 0.3;
+    millRoof.position.y = 0.32;
     const bladesHub = new THREE.Group();
-    bladesHub.position.set(0, 0.24, 0.08);
-    const bladeGeo = new THREE.BoxGeometry(0.036, 0.28, 0.01);
+    bladesHub.position.set(0, 0.25, 0.085);
+    const bladeGeo = new THREE.BoxGeometry(0.038, 0.3, 0.01);
     const b1 = new THREE.Mesh(bladeGeo, assets.materials.windmillSail);
     const b2 = new THREE.Mesh(bladeGeo, assets.materials.windmillSail);
     b2.rotation.z = Math.PI / 2;
+    customGeometries.push(millTower.geometry, millRoof.geometry, bladeGeo);
     bladesHub.add(b1, b2);
     mill.add(millTower, millRoof, bladesHub);
-    group.add(mill);
+    biomeGroup.add(mill);
     windmills.push(bladesHub);
   } else if (hex.terrain === 'hills') {
+    // Dual-stepped terracotta quarry mesa strata
+    const quarryMid = new THREE.Mesh(
+      assets.terraceGeo,
+      assets.materials.terrainTop.hills,
+    );
+    quarryMid.position.y = baseSurfaceY + 0.034;
+    quarryMid.scale.set(
+      profile.midLayerScale / 0.74,
+      profile.midLayerHeight / 0.052,
+      profile.midLayerScale / 0.74,
+    );
+    quarryMid.castShadow = true;
+    quarryMid.receiveShadow = true;
+    biomeGroup.add(quarryMid);
+
+    const quarryUpper = new THREE.Mesh(
+      assets.upperTerraceGeo,
+      assets.materials.clayRed,
+    );
+    quarryUpper.position.y = baseSurfaceY + 0.092;
+    quarryUpper.castShadow = true;
+    quarryUpper.receiveShadow = true;
+    biomeGroup.add(quarryUpper);
+
     for (let i = 0; i < 5; i++) {
       const ang = (i / 5) * Math.PI * 2 + 0.2;
-      const dist = 0.78 + rng() * 0.2;
-      const h = 0.16 + rng() * 0.24;
-      const slab = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.25, 0.37, h, 6),
-        assets.materials.clayRed,
-      );
-      slab.position.set(Math.cos(ang) * dist, surfaceY + h * 0.45, Math.sin(ang) * dist);
+      const dist = 0.76 + rng() * 0.2;
+      const h = 0.22 + rng() * 0.26;
+      const slabGeo = new THREE.CylinderGeometry(0.24, 0.39, h, 6);
+      customGeometries.push(slabGeo);
+      const slab = new THREE.Mesh(slabGeo, assets.materials.clayRed);
+      slab.position.set(Math.cos(ang) * dist, baseSurfaceY + 0.02 + h * 0.48, Math.sin(ang) * dist);
       slab.rotation.y = rng() * Math.PI;
       slab.castShadow = true;
       slab.receiveShadow = true;
-      group.add(slab);
+      biomeGroup.add(slab);
     }
 
     // Stacked kiln-fired clay quarry bricks
@@ -711,26 +1203,51 @@ export function buildHexTileGroup(
       const brick = new THREE.Mesh(assets.brickGeo, assets.materials.clayBrick);
       brick.position.set(
         -0.75 + (b % 2) * 0.125,
-        surfaceY + 0.03 + Math.floor(b / 2) * 0.058,
+        baseSurfaceY + 0.07 + Math.floor(b / 2) * 0.058,
         0.52,
       );
       brick.rotation.y = 0.4 + (rng() - 0.5) * 0.18;
       brick.castShadow = true;
-      group.add(brick);
+      biomeGroup.add(brick);
     }
   } else if (hex.terrain === 'mountains') {
+    // 2-step alpine granite massif terraces beneath craggy summits
+    const lowerMassif = new THREE.Mesh(
+      assets.terraceGeo,
+      assets.materials.rockDark,
+    );
+    lowerMassif.position.y = baseSurfaceY + 0.042;
+    lowerMassif.scale.set(
+      profile.midLayerScale / 0.74,
+      profile.midLayerHeight / 0.052,
+      profile.midLayerScale / 0.74,
+    );
+    lowerMassif.castShadow = true;
+    lowerMassif.receiveShadow = true;
+    biomeGroup.add(lowerMassif);
+
+    const upperRidge = new THREE.Mesh(
+      assets.upperTerraceGeo,
+      assets.materials.rockGrey,
+    );
+    upperRidge.position.y = baseSurfaceY + 0.128;
+    upperRidge.scale.set(1.06, 1.35, 1.06);
+    upperRidge.castShadow = true;
+    upperRidge.receiveShadow = true;
+    biomeGroup.add(upperRidge);
+
     const peakConfigs = [
-      { ang: 0.3, d: 0.78, r: 0.48, h: 0.94 },
-      { ang: 1.5, d: 0.74, r: 0.42, h: 0.78 },
-      { ang: 2.7, d: 0.82, r: 0.38, h: 0.66 },
-      { ang: 3.9, d: 0.76, r: 0.46, h: 0.88 },
-      { ang: 5.1, d: 0.8, r: 0.36, h: 0.58 },
+      { ang: 0.3, d: 0.78, r: 0.5, h: 1.08 },
+      { ang: 1.5, d: 0.72, r: 0.44, h: 0.9 },
+      { ang: 2.7, d: 0.8, r: 0.4, h: 0.74 },
+      { ang: 3.9, d: 0.74, r: 0.48, h: 1.0 },
+      { ang: 5.1, d: 0.78, r: 0.38, h: 0.68 },
     ];
     for (const cfg of peakConfigs) {
       addMountainPeak(
-        group,
+        biomeGroup,
         Math.cos(cfg.ang) * cfg.d,
-        surfaceY - 0.02,
+        baseSurfaceY + 0.05,
         Math.sin(cfg.ang) * cfg.d,
         cfg.r,
         cfg.h,
@@ -740,69 +1257,92 @@ export function buildHexTileGroup(
     }
     for (let i = 0; i < 4; i++) {
       const ang = rng() * Math.PI * 2;
-      const ore = new THREE.Mesh(
-        new THREE.OctahedronGeometry(0.11, 0),
-        assets.materials.oreVein,
-      );
-      ore.position.set(Math.cos(ang) * 0.58, surfaceY + 0.05, Math.sin(ang) * 0.58);
+      const oreGeo = new THREE.OctahedronGeometry(0.115, 0);
+      customGeometries.push(oreGeo);
+      const ore = new THREE.Mesh(oreGeo, assets.materials.oreVein);
+      ore.position.set(Math.cos(ang) * 0.58, baseSurfaceY + 0.11, Math.sin(ang) * 0.58);
       ore.castShadow = true;
-      group.add(ore);
+      biomeGroup.add(ore);
     }
   } else if (hex.terrain === 'desert') {
-    for (let i = 0; i < 3; i++) {
-      const ang = (i / 3) * Math.PI * 2 + 0.6;
-      const dune = new THREE.Mesh(
-        new THREE.SphereGeometry(0.62, 12, 7, 0, Math.PI * 2, 0, Math.PI / 2),
-        assets.materials.sandDune,
-      );
-      dune.scale.set(1.42, 0.25, 0.72);
+    const duneShelf = new THREE.Mesh(
+      assets.terraceGeo,
+      assets.materials.terrainTop.desert,
+    );
+    duneShelf.position.y = baseSurfaceY + 0.016;
+    duneShelf.scale.set(0.95, 0.72, 0.95);
+    duneShelf.receiveShadow = true;
+    biomeGroup.add(duneShelf);
+
+    for (let i = 0; i < 4; i++) {
+      const ang = (i / 4) * Math.PI * 2 + 0.5;
+      const duneGeo = new THREE.SphereGeometry(0.62, 12, 7, 0, Math.PI * 2, 0, Math.PI / 2);
+      customGeometries.push(duneGeo);
+      const dune = new THREE.Mesh(duneGeo, assets.materials.sandDune);
+      dune.scale.set(1.42, 0.28, 0.72);
       dune.rotation.y = ang + 1.1;
-      dune.position.set(Math.cos(ang) * 0.72, surfaceY - 0.03, Math.sin(ang) * 0.72);
+      dune.position.set(Math.cos(ang) * 0.7, baseSurfaceY + 0.01, Math.sin(ang) * 0.7);
+      dune.castShadow = true;
       dune.receiveShadow = true;
-      group.add(dune);
+      biomeGroup.add(dune);
     }
 
-    // Small shimmering desert oasis pool on one flank
-    const oasisRim = new THREE.Mesh(
-      new THREE.TorusGeometry(0.22, 0.045, 6, 16).rotateX(Math.PI / 2),
-      assets.materials.rockGrey,
-    );
-    oasisRim.position.set(-0.62, surfaceY + 0.02, -0.58);
-    const oasisPool = new THREE.Mesh(
-      new THREE.CircleGeometry(0.21, 16).rotateX(-Math.PI / 2),
-      assets.materials.oasisWater,
-    );
-    oasisPool.position.set(-0.62, surfaceY + 0.025, -0.58);
-    group.add(oasisRim, oasisPool);
+    // Sunken desert oasis pool with stone rim + oasis palm tree
+    const oasisRimGeo = new THREE.TorusGeometry(0.24, 0.05, 6, 16).rotateX(Math.PI / 2);
+    const oasisPoolGeo = new THREE.CircleGeometry(0.22, 16).rotateX(-Math.PI / 2);
+    const palmGeo = new THREE.CylinderGeometry(0.022, 0.036, 0.34, 6);
+    customGeometries.push(oasisRimGeo, oasisPoolGeo, palmGeo);
+
+    const oasisRim = new THREE.Mesh(oasisRimGeo, assets.materials.rockGrey);
+    oasisRim.position.set(-0.62, baseSurfaceY + 0.04, -0.58);
+    const oasisPool = new THREE.Mesh(oasisPoolGeo, assets.materials.oasisWater);
+    oasisPool.position.set(-0.62, baseSurfaceY + 0.045, -0.58);
+    biomeGroup.add(oasisRim, oasisPool);
+
+    const palmTrunk = new THREE.Mesh(palmGeo, assets.materials.bark);
+    palmTrunk.position.set(-0.84, baseSurfaceY + 0.18, -0.44);
+    palmTrunk.rotation.z = -0.18;
+    palmTrunk.castShadow = true;
+    biomeGroup.add(palmTrunk);
+    for (let f = 0; f < 5; f++) {
+      const frond = new THREE.Mesh(assets.fernGeo, assets.materials.pineLeaves[1]);
+      const fa = (f / 5) * Math.PI * 2;
+      frond.position.set(-0.81 + Math.cos(fa) * 0.1, baseSurfaceY + 0.35, -0.44 + Math.sin(fa) * 0.1);
+      frond.rotation.z = Math.PI / 2.2;
+      frond.rotation.y = -fa;
+      frond.scale.set(1.1, 1.8, 0.65);
+      biomeGroup.add(frond);
+    }
 
     for (const [cx, cz] of [
       [0.85, -0.52],
       [-0.78, 0.62],
     ] as const) {
       const cactus = new THREE.Group();
-      cactus.position.set(cx, surfaceY, cz);
-      const stem = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.035, 0.18, 4, 7),
-        assets.materials.cactusGreen,
-      );
+      cactus.position.set(cx, baseSurfaceY + 0.02, cz);
+      const stemGeo = new THREE.CapsuleGeometry(0.035, 0.18, 4, 7);
+      const armGeo = new THREE.CapsuleGeometry(0.025, 0.08, 4, 6);
+      customGeometries.push(stemGeo, armGeo);
+      const stem = new THREE.Mesh(stemGeo, assets.materials.cactusGreen);
       stem.position.y = 0.11;
-      const arm = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.025, 0.08, 4, 6),
-        assets.materials.cactusGreen,
-      );
+      const arm = new THREE.Mesh(armGeo, assets.materials.cactusGreen);
       arm.position.set(0.05, 0.14, 0);
       arm.rotation.z = -0.7;
       cactus.add(stem, arm);
-      group.add(cactus);
+      biomeGroup.add(cactus);
     }
   }
 
-  // 3. Number token disc (brass rim + engraved parchment face)
+  // 3. Number token mount (stays upright outside flipPivot so numbers remain legible face-down & face-up)
+  const unrevealedTokenY = 0.378;
+  const revealedTokenY = profile.revealedTokenY + tileElevationJitter;
+  const tokenMountGroup = new THREE.Group();
+  tokenMountGroup.position.set(0, hex.revealed ? revealedTokenY : unrevealedTokenY, 0);
+
   if (hex.numberToken !== null) {
     const tokenFaceTex = textures.numberTokens.get(hex.numberToken);
     if (tokenFaceTex) {
       const tokenGroup = new THREE.Group();
-      tokenGroup.position.set(0, surfaceY + 0.036, 0);
 
       const brassDisc = new THREE.Mesh(assets.tokenGeo, assets.materials.tokenBrass);
       brassDisc.castShadow = true;
@@ -814,16 +1354,34 @@ export function buildHexTileGroup(
         roughness: 0.45,
         metalness: 0.04,
       });
+      customMaterials.push(faceMat);
       const faceDisc = new THREE.Mesh(assets.tokenFaceGeo, faceMat);
       faceDisc.rotation.x = -Math.PI / 2;
       faceDisc.position.y = 0.038;
       tokenGroup.add(faceDisc);
 
-      group.add(tokenGroup);
+      tokenMountGroup.add(tokenGroup);
     }
   }
+  group.add(tokenMountGroup);
 
-  return { group, swayTrees, windmills };
+  return {
+    hexId: hex.id,
+    revealed: hex.revealed,
+    group,
+    flipPivot,
+    biomeGroup,
+    plainBackGroup,
+    tokenMountGroup,
+    unrevealedTokenY,
+    revealedTokenY,
+    swayTrees,
+    windmills,
+    disposeCustomGeometries: () => {
+      customGeometries.forEach((g) => g.dispose());
+      customMaterials.forEach((m) => m.dispose());
+    },
+  };
 }
 
 /**

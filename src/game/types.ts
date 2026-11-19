@@ -21,6 +21,7 @@ export type DevCardType =
 
 export type GamePhase =
   | 'lobby'
+  | 'tile_reveal'
   | 'setup_forward_settlement'
   | 'setup_forward_road'
   | 'setup_reverse_settlement'
@@ -34,7 +35,7 @@ export type GamePhase =
   | 'road_building_2'
   | 'finished';
 
-export type BoardPreset = 'standard' | 'random_balanced';
+export type BoardPreset = 'beginner_setup' | 'standard' | 'random_balanced';
 
 export interface ResourceBundle {
   timber: number;
@@ -53,6 +54,7 @@ export interface HexTile {
   terrain: TerrainType;
   numberToken: number | null;
   hasRobber: boolean;
+  revealed: boolean;
 }
 
 export interface BoardVertex {
@@ -164,6 +166,17 @@ export interface GameEvent {
   details?: Record<string, unknown>;
 }
 
+export interface HarvestGrant {
+  hexId: string;
+  terrain: TerrainType;
+  numberToken: number;
+  playerId: string;
+  resource: ResourceType;
+  amount: number;
+  hexX: number;
+  hexZ: number;
+}
+
 export interface GameState {
   roomId: string;
   preset: BoardPreset;
@@ -179,9 +192,12 @@ export interface GameState {
   edges: BoardEdge[];
   harbors: Harbor[];
   devDeck: DevCardType[];
+  bank: ResourceBundle;
   devCardPlayedThisTurn: boolean;
   dice: [number, number] | null;
   diceRollSeq: number;
+  shuffleSeq: number;
+  lastHarvestGrants: HarvestGrant[];
   pendingDiscardPlayerIds: string[];
   stealCandidateIds: string[];
   activeTradeOffers: TradeOffer[];
@@ -206,9 +222,12 @@ export interface PublicGameState {
   edges: BoardEdge[];
   harbors: Harbor[];
   devDeckRemaining: number;
+  bank: ResourceBundle;
   devCardPlayedThisTurn: boolean;
   dice: [number, number] | null;
   diceRollSeq: number;
+  shuffleSeq: number;
+  lastHarvestGrants: HarvestGrant[];
   pendingDiscardPlayerIds: string[];
   stealCandidateIds: string[];
   activeTradeOffers: TradeOffer[];
@@ -237,6 +256,19 @@ export const ResourceBundleSchema = z.object({
 export const ResourceTypeSchema = z.enum(['timber', 'wool', 'grain', 'brick', 'ore']);
 
 export const GameActionSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('SHUFFLE_TILES'),
+    playerId: z.string(),
+  }),
+  z.object({
+    type: z.literal('FLIP_TILE'),
+    playerId: z.string(),
+    hexId: z.string(),
+  }),
+  z.object({
+    type: z.literal('FLIP_ALL_TILES'),
+    playerId: z.string(),
+  }),
   z.object({
     type: z.literal('PLACE_SETUP_SETTLEMENT'),
     playerId: z.string(),

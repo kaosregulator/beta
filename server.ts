@@ -16,6 +16,12 @@ import {
   sanitizeStateForPublic,
 } from './src/game/rules';
 import { chooseBotAction, evaluateBotTradeResponse } from './src/game/aiBot';
+import {
+  advanceTutorialMission,
+  applyTutorialSuppliesForMission,
+  makeTutorialDiceRng,
+  type TutorialMissionId,
+} from './src/game/tutorialEngine';
 import type { BoardPreset, FactionColor, GameState } from './src/game/types';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -31,8 +37,11 @@ interface ClientMeta {
 
 interface RoomRecord {
   roomId: string;
-  mode: 'tv_host' | 'quick_play';
+  mode: 'tv_host' | 'quick_play' | 'tutorial';
+  tutorialMission?: TutorialMissionId;
+  tutorialHumanId?: string;
   preset: BoardPreset;
+  blindStart: boolean;
   victoryTarget: number;
   status: 'lobby' | 'playing' | 'finished';
   lobbyPlayers: LobbyPlayerSlot[];
@@ -67,7 +76,9 @@ function makeRoomSnapshot(room: RoomRecord): RoomSnapshot {
   return {
     roomId: room.roomId,
     mode: room.mode,
+    tutorialMission: room.tutorialMission,
     preset: room.preset,
+    blindStart: room.blindStart,
     victoryTarget: room.victoryTarget,
     status: room.status,
     lobbyPlayers: room.lobbyPlayers,
@@ -116,7 +127,12 @@ function scheduleBotStep(room: RoomRecord) {
           if (!room.game || room.game.phase !== 'main') return;
           const liveOffer = room.game.activeTradeOffers.find((o) => o.id === offer.id);
           if (!liveOffer) return;
-          const accept = evaluateBotTradeResponse(room.game, targetBot.id, liveOffer);
+          const accept = evaluateBotTradeResponse(
+            room.game,
+            targetBot.id,
+            liveOffer,
+            room.mode === 'tutorial',
+          );
           const result = applyAction(room.game, {
             type: 'RESPOND_TRADE_OFFER',
             playerId: targetBot.id,
@@ -155,7 +171,24 @@ function scheduleBotStep(room: RoomRecord) {
     if (!room.game || room.game.phase === 'finished') return;
     const action = chooseBotAction(room.game, actingBotId!);
     if (!action) return;
-    const result = applyAction(room.game, action);
+
+    // During guided tutorial turns, keep Capt. Thorne's rolls deterministic non-7 (e.g. 5 or 9) so an early 7 doesn't disrupt lessons
+    let botRng: (() => number) | undefined;
+    if (
+      room.mode === 'tutorial' &&
+      room.tutorialMission &&
+      room.tutorialMission !== 'free_play' &&
+      action.type === 'ROLL_DICE'
+    ) {
+      let c = 0;
+      const faces = room.game.turnNumber % 2 === 0 ? [2, 3] : [4, 5];
+      botRng = () => {
+        c += 1;
+        return ((c === 1 ? faces[0] : faces[1]) - 0.5) / 6;
+      };
+    }
+
+    const result = applyAction(room.game, action, botRng);
     if (result.ok) {
       room.game = result.state;
       if (room.game.phase === 'finished') {
@@ -246,12 +279,14 @@ async function startServer() {
         detachClientFromRoom(meta);
         const roomId = generateRoomPin();
         const preset: BoardPreset = msg.preset ?? 'random_balanced';
+        const blindStart = msg.blindStart ?? (preset !== 'beginner_setup');
         const victoryTarget = msg.victoryTarget ?? 10;
 
         const room: RoomRecord = {
           roomId,
           mode: msg.mode,
           preset,
+          blindStart,
           victoryTarget,
           status: 'lobby',
           lobbyPlayers: [],
@@ -265,7 +300,16 @@ async function startServer() {
         meta.roomId = roomId;
         meta.isHost = true;
 
-        if (msg.mode === 'quick_play') {
+        if (msg.mode === 'quick_play' || msg.mode === 'tutorial') {
+          const isTutorial = msg.mode === 'tutorial';
+          const effectivePreset: BoardPreset = isTutorial ? (msg.preset ?? 'standard') : preset;
+          const effectiveBlind = isTutorial ? true : blindStart;
+          const effectiveTarget = isTutorial ? (msg.victoryTarget ?? 8) : victoryTarget;
+
+          room.preset = effectivePreset;
+          room.blindStart = effectiveBlind;
+          room.victoryTarget = effectiveTarget;
+
           const hostPlayerId = `p_${crypto.randomBytes(4).toString('hex')}`;
           const token = crypto.randomBytes(8).toString('hex');
           const hostColor = msg.hostColor ?? 'crimson';
@@ -280,7 +324,7 @@ async function startServer() {
           room.playerTokens.set(token, hostPlayerId);
           meta.playerId = hostPlayerId;
 
-          const botCount = msg.botCount ?? 3;
+          const botCount = isTutorial ? 1 : (msg.botCount ?? 3);
           for (let i = 0; i < botCount; i++) {
             const c = pickAvailableColor(room.lobbyPlayers.map((p) => p.color));
             if (!c) break;
@@ -293,11 +337,17 @@ async function startServer() {
             });
           }
 
+          if (isTutorial) {
+            room.tutorialMission = 'flip_tiles';
+            room.tutorialHumanId = hostPlayerId;
+          }
+
           room.status = 'playing';
           room.game = createInitialGameState({
             roomId,
-            preset,
-            victoryTarget,
+            preset: effectivePreset,
+            blindStart: effectiveBlind,
+            victoryTarget: effectiveTarget,
             players: room.lobbyPlayers,
           });
 
@@ -477,7 +527,14 @@ async function startServer() {
 
       if (msg.type === 'UPDATE_ROOM_SETTINGS') {
         if (room.status !== 'lobby') return;
-        if (msg.preset) room.preset = msg.preset;
+        if (msg.preset) {
+          room.preset = msg.preset;
+          if (msg.preset === 'beginner_setup') room.blindStart = false;
+          else if (msg.blindStart === undefined) room.blindStart = true;
+        }
+        if (msg.blindStart !== undefined) {
+          room.blindStart = room.preset === 'beginner_setup' ? false : msg.blindStart;
+        }
         if (msg.victoryTarget) room.victoryTarget = msg.victoryTarget;
         broadcastRoom(room);
         return;
@@ -519,6 +576,7 @@ async function startServer() {
         room.game = createInitialGameState({
           roomId: room.roomId,
           preset: room.preset,
+          blindStart: room.blindStart,
           victoryTarget: room.victoryTarget,
           players: room.lobbyPlayers,
         });
@@ -531,9 +589,13 @@ async function startServer() {
       if (msg.type === 'REMATCH') {
         if (room.lobbyPlayers.length < 2) return;
         room.status = 'playing';
+        if (room.mode === 'tutorial') {
+          room.tutorialMission = 'flip_tiles';
+        }
         room.game = createInitialGameState({
           roomId: room.roomId,
           preset: room.preset,
+          blindStart: room.blindStart,
           victoryTarget: room.victoryTarget,
           players: room.lobbyPlayers,
         });
@@ -563,10 +625,43 @@ async function startServer() {
           return;
         }
 
-        const result = applyAction(room.game, msg.action);
+        const isGuidedHumanRoll =
+          room.mode === 'tutorial' &&
+          room.tutorialMission &&
+          room.tutorialMission !== 'free_play' &&
+          room.tutorialHumanId === msg.action.playerId &&
+          msg.action.type === 'ROLL_DICE';
+
+        const rng = isGuidedHumanRoll
+          ? makeTutorialDiceRng(room.game, room.tutorialHumanId!)
+          : undefined;
+
+        const result = applyAction(room.game, msg.action, rng);
         if (!result.ok) {
           sendJson(ws, { type: 'ACTION_ERROR', message: result.error });
           return;
+        }
+
+        if (
+          room.mode === 'tutorial' &&
+          room.tutorialMission &&
+          room.tutorialHumanId &&
+          msg.action.playerId === room.tutorialHumanId
+        ) {
+          const nextMission = advanceTutorialMission(
+            room.tutorialMission,
+            msg.action,
+            result.state,
+            room.tutorialHumanId,
+          );
+          if (nextMission !== room.tutorialMission) {
+            room.tutorialMission = nextMission;
+            applyTutorialSuppliesForMission(
+              nextMission,
+              result.state,
+              room.tutorialHumanId,
+            );
+          }
         }
 
         room.game = result.state;

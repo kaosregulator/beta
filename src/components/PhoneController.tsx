@@ -6,8 +6,10 @@ import {
   Hammer,
   Layers,
   Repeat,
+  RotateCw,
   Send,
   Shield,
+  Shuffle,
   Volume2,
   VolumeX,
   X,
@@ -58,7 +60,7 @@ function PhonePlacementMap({
 }: {
   game: PublicGameState;
   playerId: string;
-  mode: 'settlement' | 'road' | 'city' | 'robber';
+  mode: 'settlement' | 'road' | 'city' | 'robber' | 'flip';
   onPickVertex: (id: string) => void;
   onPickEdge: (id: string) => void;
   onPickHex: (id: string) => void;
@@ -68,6 +70,7 @@ function PhonePlacementMap({
     if (mode === 'settlement') return new Set(getValidSettlementVertices(pseudo, playerId));
     if (mode === 'city') return new Set(getValidCityVertices(pseudo, playerId));
     if (mode === 'road') return new Set(getValidRoadEdges(pseudo, playerId));
+    if (mode === 'flip') return new Set(game.hexes.filter((h) => !h.revealed).map((h) => h.id));
     return new Set(game.hexes.filter((h) => !h.hasRobber).map((h) => h.id));
   }, [game, playerId, mode]);
 
@@ -89,10 +92,12 @@ function PhonePlacementMap({
     <div className="bg-[#0d1924] border border-[#d4aa54]/40 rounded-2xl p-3">
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-semibold text-[#f5d88c]">
-          Tap a glowing {mode} spot on the island
+          {mode === 'flip'
+            ? 'Tap any plain numbered tile to flip it face-up'
+            : `Tap a glowing ${mode} spot on the island`}
         </span>
         <span className="font-mono-num text-[11px] text-[#94a3b8]">
-          {validIds.size} valid
+          {validIds.size} {mode === 'flip' ? 'face-down' : 'valid'}
         </span>
       </div>
 
@@ -176,7 +181,10 @@ function PhonePlacementMap({
             const a = (Math.PI / 180) * (60 * i - 30);
             pts.push(`${(h.x + 1.56 * Math.cos(a)).toFixed(2)},${(h.z + 1.56 * Math.sin(a)).toFixed(2)}`);
           }
-          const isValidHex = mode === 'robber' && validIds.has(h.id);
+          const isValidRobberHex = mode === 'robber' && validIds.has(h.id);
+          const isValidFlipHex = mode === 'flip' && validIds.has(h.id);
+          const isValidHex = isValidRobberHex || isValidFlipHex;
+          const fillColor = h.revealed ? terrainColors[h.terrain] : '#b9ab8e';
           return (
             <g
               key={h.id}
@@ -185,9 +193,15 @@ function PhonePlacementMap({
             >
               <polygon
                 points={pts.join(' ')}
-                fill={terrainColors[h.terrain]}
-                stroke={isValidHex ? '#f75948' : '#1b2836'}
-                strokeWidth={isValidHex ? 0.16 : 0.08}
+                fill={fillColor}
+                stroke={
+                  isValidRobberHex
+                    ? '#f75948'
+                    : isValidFlipHex
+                      ? '#f5d88c'
+                      : '#1b2836'
+                }
+                strokeWidth={isValidHex ? 0.14 : 0.08}
               />
               {h.numberToken && (
                 <text
@@ -196,12 +210,20 @@ function PhonePlacementMap({
                   textAnchor="middle"
                   fontSize="0.72"
                   fontWeight="bold"
-                  fill={h.numberToken === 6 || h.numberToken === 8 ? '#fca5a5' : '#f8f3e6'}
+                  fill={
+                    h.revealed
+                      ? h.numberToken === 6 || h.numberToken === 8
+                        ? '#fca5a5'
+                        : '#f8f3e6'
+                      : h.numberToken === 6 || h.numberToken === 8
+                        ? '#991b1b'
+                        : '#1e1b16'
+                  }
                 >
                   {h.numberToken}
                 </text>
               )}
-              {h.hasRobber && (
+              {h.revealed && h.hasRobber && (
                 <g>
                   <circle
                     cx={h.x + 0.45}
@@ -223,7 +245,7 @@ function PhonePlacementMap({
                   </text>
                 </g>
               )}
-              {isValidHex && (
+              {isValidRobberHex && (
                 <circle
                   cx={h.x}
                   cy={h.z}
@@ -520,8 +542,10 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
     ore: 4,
   };
 
-  let activePlacementMode: 'settlement' | 'road' | 'city' | 'robber' | null = null;
-  if (isMyTurn) {
+  let activePlacementMode: 'settlement' | 'road' | 'city' | 'robber' | 'flip' | null = null;
+  if (game.phase === 'tile_reveal') {
+    activePlacementMode = 'flip';
+  } else if (isMyTurn) {
     if (
       game.phase === 'setup_forward_settlement' ||
       game.phase === 'setup_reverse_settlement'
@@ -813,7 +837,11 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
               }
             }}
             onPickHex={(hexId) => {
-              dispatchGameAction({ type: 'MOVE_ROBBER', playerId, hexId });
+              if (game.phase === 'tile_reveal') {
+                dispatchGameAction({ type: 'FLIP_TILE', playerId, hexId });
+              } else {
+                dispatchGameAction({ type: 'MOVE_ROBBER', playerId, hexId });
+              }
             }}
           />
         )}
@@ -821,6 +849,28 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
         {/* Tab Views */}
         {tab === 'play' && (
           <div className="space-y-3">
+            {game.phase === 'tile_reveal' && (
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  disabled={game.hexes.filter((h) => !h.revealed).length < 2}
+                  onClick={() => dispatchGameAction({ type: 'SHUFFLE_TILES', playerId })}
+                  className="min-h-[50px] rounded-2xl bg-[#182635] border border-[#d4aa54]/50 disabled:opacity-40 text-[#f7eed7] font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Shuffle className="w-4 h-4 text-[#d4aa54]" />
+                  Shuffle Tiles
+                </button>
+                <button
+                  type="button"
+                  onClick={() => dispatchGameAction({ type: 'FLIP_ALL_TILES', playerId })}
+                  className="min-h-[50px] rounded-2xl bg-[#b88635] text-[#14100a] font-bold text-xs flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <RotateCw className="w-4 h-4" />
+                  Flip All &amp; Begin
+                </button>
+              </div>
+            )}
+
             {isMyTurn && game.phase === 'roll' && (
               <button
                 type="button"
@@ -880,120 +930,168 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
           </div>
         )}
 
-        {tab === 'build' && (
-          <div className="space-y-2.5">
-            <button
-              type="button"
-              disabled={
-                !isMyTurn ||
-                game.phase !== 'main' ||
-                !hasResources(myRes, BUILD_COSTS.road) ||
-                (myPublic?.roadsRemaining ?? 0) <= 0
-              }
-              onClick={() =>
-                setPlacementIntent(placementIntent === 'road' ? null : 'road')
-              }
-              className="w-full min-h-[56px] px-4 py-3 rounded-2xl bg-[#14202c] border border-white/15 disabled:opacity-40 flex items-center justify-between text-left"
-            >
-              <div>
-                <div className="text-sm font-semibold text-[#f7eed7]">Build Road</div>
-                <div className="text-xs text-[#9fb0c2] flex items-center gap-1 mt-0.5">
-                  <ResourceIcon type="timber" className="w-4 h-4" />
-                  <ResourceIcon type="brick" className="w-4 h-4" />
-                  <span>1 Timber · 1 Brick</span>
-                </div>
-              </div>
-              <span className="text-xs font-semibold text-[#f5d88c]">
-                {placementIntent === 'road' ? 'Cancel' : 'Place'}
-              </span>
-            </button>
+        {tab === 'build' && (() => {
+          const canBuildRoad =
+            isMyTurn &&
+            game.phase === 'main' &&
+            hasResources(myRes, BUILD_COSTS.road) &&
+            (myPublic?.roadsRemaining ?? 0) > 0;
+          const canBuildSettlement =
+            isMyTurn &&
+            game.phase === 'main' &&
+            hasResources(myRes, BUILD_COSTS.settlement) &&
+            (myPublic?.settlementsRemaining ?? 0) > 0;
+          const canBuildCity =
+            isMyTurn &&
+            game.phase === 'main' &&
+            hasResources(myRes, BUILD_COSTS.city) &&
+            (myPublic?.citiesRemaining ?? 0) > 0;
+          const canBuyCard =
+            isMyTurn &&
+            game.phase === 'main' &&
+            game.devDeckRemaining > 0 &&
+            hasResources(myRes, BUILD_COSTS.dev_card);
 
-            <button
-              type="button"
-              disabled={
-                !isMyTurn ||
-                game.phase !== 'main' ||
-                !hasResources(myRes, BUILD_COSTS.settlement) ||
-                (myPublic?.settlementsRemaining ?? 0) <= 0
-              }
-              onClick={() =>
-                setPlacementIntent(
-                  placementIntent === 'settlement' ? null : 'settlement',
-                )
-              }
-              className="w-full min-h-[56px] px-4 py-3 rounded-2xl bg-[#14202c] border border-white/15 disabled:opacity-40 flex items-center justify-between text-left"
-            >
-              <div>
-                <div className="text-sm font-semibold text-[#f7eed7]">
-                  Build Settlement (+1 VP)
+          return (
+            <div className="space-y-2.5">
+              <button
+                type="button"
+                disabled={!canBuildRoad}
+                onClick={() =>
+                  setPlacementIntent(placementIntent === 'road' ? null : 'road')
+                }
+                className={`w-full min-h-[56px] px-4 py-3 rounded-2xl border disabled:opacity-40 flex items-center justify-between text-left ${
+                  canBuildRoad
+                    ? 'bg-[#182635] border-[#d4aa54]/55'
+                    : 'bg-[#14202c] border-white/15'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-[#f7eed7]">Build Road</span>
+                    {canBuildRoad && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#d4aa54]/20 text-[#f5d88c]">
+                        Ready
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-[#9fb0c2] flex items-center gap-1 mt-0.5">
+                    <ResourceIcon type="timber" className="w-4 h-4" />
+                    <ResourceIcon type="brick" className="w-4 h-4" />
+                    <span>1 Timber · 1 Brick</span>
+                  </div>
                 </div>
-                <div className="text-xs text-[#9fb0c2] flex items-center gap-1 mt-0.5">
-                  <ResourceIcon type="timber" className="w-4 h-4" />
-                  <ResourceIcon type="brick" className="w-4 h-4" />
-                  <ResourceIcon type="wool" className="w-4 h-4" />
-                  <ResourceIcon type="grain" className="w-4 h-4" />
-                </div>
-              </div>
-              <span className="text-xs font-semibold text-[#f5d88c]">
-                {placementIntent === 'settlement' ? 'Cancel' : 'Place'}
-              </span>
-            </button>
+                <span className="text-xs font-semibold text-[#f5d88c]">
+                  {placementIntent === 'road' ? 'Cancel' : 'Place'}
+                </span>
+              </button>
 
-            <button
-              type="button"
-              disabled={
-                !isMyTurn ||
-                game.phase !== 'main' ||
-                !hasResources(myRes, BUILD_COSTS.city) ||
-                (myPublic?.citiesRemaining ?? 0) <= 0
-              }
-              onClick={() =>
-                setPlacementIntent(placementIntent === 'city' ? null : 'city')
-              }
-              className="w-full min-h-[56px] px-4 py-3 rounded-2xl bg-[#14202c] border border-white/15 disabled:opacity-40 flex items-center justify-between text-left"
-            >
-              <div>
-                <div className="text-sm font-semibold text-[#f7eed7]">
-                  Upgrade to City (+2 VP)
+              <button
+                type="button"
+                disabled={!canBuildSettlement}
+                onClick={() =>
+                  setPlacementIntent(
+                    placementIntent === 'settlement' ? null : 'settlement',
+                  )
+                }
+                className={`w-full min-h-[56px] px-4 py-3 rounded-2xl border disabled:opacity-40 flex items-center justify-between text-left ${
+                  canBuildSettlement
+                    ? 'bg-[#182635] border-[#d4aa54]/55'
+                    : 'bg-[#14202c] border-white/15'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-[#f7eed7]">
+                      Build Settlement (+1 VP)
+                    </span>
+                    {canBuildSettlement && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#d4aa54]/20 text-[#f5d88c]">
+                        Ready
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-[#9fb0c2] flex items-center gap-1 mt-0.5">
+                    <ResourceIcon type="timber" className="w-4 h-4" />
+                    <ResourceIcon type="brick" className="w-4 h-4" />
+                    <ResourceIcon type="wool" className="w-4 h-4" />
+                    <ResourceIcon type="grain" className="w-4 h-4" />
+                  </div>
                 </div>
-                <div className="text-xs text-[#9fb0c2] flex items-center gap-1 mt-0.5">
-                  <ResourceIcon type="grain" className="w-4 h-4" />
-                  <ResourceIcon type="grain" className="w-4 h-4" />
-                  <ResourceIcon type="ore" className="w-4 h-4" />
-                  <ResourceIcon type="ore" className="w-4 h-4" />
-                  <ResourceIcon type="ore" className="w-4 h-4" />
-                </div>
-              </div>
-              <span className="text-xs font-semibold text-[#f5d88c]">
-                {placementIntent === 'city' ? 'Cancel' : 'Upgrade'}
-              </span>
-            </button>
+                <span className="text-xs font-semibold text-[#f5d88c]">
+                  {placementIntent === 'settlement' ? 'Cancel' : 'Place'}
+                </span>
+              </button>
 
-            <button
-              type="button"
-              disabled={
-                !isMyTurn ||
-                game.phase !== 'main' ||
-                game.devDeckRemaining === 0 ||
-                !hasResources(myRes, BUILD_COSTS.dev_card)
-              }
-              onClick={() => dispatchGameAction({ type: 'BUY_DEV_CARD', playerId })}
-              className="w-full min-h-[56px] px-4 py-3 rounded-2xl bg-[#14202c] border border-white/15 disabled:opacity-40 flex items-center justify-between text-left"
-            >
-              <div>
-                <div className="text-sm font-semibold text-[#f7eed7]">
-                  Buy Development Card ({game.devDeckRemaining} left)
+              <button
+                type="button"
+                disabled={!canBuildCity}
+                onClick={() =>
+                  setPlacementIntent(placementIntent === 'city' ? null : 'city')
+                }
+                className={`w-full min-h-[56px] px-4 py-3 rounded-2xl border disabled:opacity-40 flex items-center justify-between text-left ${
+                  canBuildCity
+                    ? 'bg-[#182635] border-[#d4aa54]/55'
+                    : 'bg-[#14202c] border-white/15'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-[#f7eed7]">
+                      Upgrade to City (+2 VP)
+                    </span>
+                    {canBuildCity && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#d4aa54]/20 text-[#f5d88c]">
+                        Ready
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-[#9fb0c2] flex items-center gap-1 mt-0.5">
+                    <ResourceIcon type="grain" className="w-4 h-4" />
+                    <ResourceIcon type="grain" className="w-4 h-4" />
+                    <ResourceIcon type="ore" className="w-4 h-4" />
+                    <ResourceIcon type="ore" className="w-4 h-4" />
+                    <ResourceIcon type="ore" className="w-4 h-4" />
+                    <span className="ml-1 text-[#cbb894]">2x Resource Yield</span>
+                  </div>
                 </div>
-                <div className="text-xs text-[#9fb0c2] flex items-center gap-1 mt-0.5">
-                  <ResourceIcon type="wool" className="w-4 h-4" />
-                  <ResourceIcon type="grain" className="w-4 h-4" />
-                  <ResourceIcon type="ore" className="w-4 h-4" />
+                <span className="text-xs font-semibold text-[#f5d88c]">
+                  {placementIntent === 'city' ? 'Cancel' : 'Upgrade'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                disabled={!canBuyCard}
+                onClick={() => dispatchGameAction({ type: 'BUY_DEV_CARD', playerId })}
+                className={`w-full min-h-[56px] px-4 py-3 rounded-2xl border disabled:opacity-40 flex items-center justify-between text-left ${
+                  canBuyCard
+                    ? 'bg-[#182635] border-[#d4aa54]/55'
+                    : 'bg-[#14202c] border-white/15'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-[#f7eed7]">
+                      Buy Development Card ({game.devDeckRemaining} left)
+                    </span>
+                    {canBuyCard && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#d4aa54]/20 text-[#f5d88c]">
+                        Ready
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-[#9fb0c2] flex items-center gap-1 mt-0.5">
+                    <ResourceIcon type="wool" className="w-4 h-4" />
+                    <ResourceIcon type="grain" className="w-4 h-4" />
+                    <ResourceIcon type="ore" className="w-4 h-4" />
+                  </div>
                 </div>
-              </div>
-              <span className="text-xs font-semibold text-[#f5d88c]">Draw</span>
-            </button>
-          </div>
-        )}
+                <span className="text-xs font-semibold text-[#f5d88c]">Draw</span>
+              </button>
+            </div>
+          );
+        })()}
 
         {tab === 'trade' && (
           <div className="space-y-4">
@@ -1023,7 +1121,7 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
                 >
                   {RES_KEYS.map((r) => (
                     <option key={r} value={r}>
-                      Get 1 {RESOURCE_META[r].label}
+                      Get 1 {RESOURCE_META[r].label} (Bank {game.bank?.[r] ?? 19})
                     </option>
                   ))}
                 </select>
@@ -1034,6 +1132,7 @@ export function PhoneController({ initialPin = '' }: { initialPin?: string }) {
                   !isMyTurn ||
                   game.phase !== 'main' ||
                   tradeGive === tradeGet ||
+                  (game.bank?.[tradeGet] ?? 19) < 1 ||
                   myRes[tradeGive] < ratios[tradeGive]
                 }
                 onClick={() =>

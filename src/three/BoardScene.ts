@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import type { PublicGameState } from '../game/types';
+import type { PublicGameState, TerrainType } from '../game/types';
 import { generateBoard } from '../game/boardGen';
 import {
+  BLOOM_LAYER,
+  DEFAULT_SETTLEMENT_HOUSE_SET,
   createCityMesh,
   createDieMesh,
   createHarborMesh,
@@ -11,15 +13,22 @@ import {
   createRoadMesh,
   createRobberMesh,
   createSettlementMesh,
+  disposePieceGroupGeometries,
   getDieRotationForValue,
   type PieceMaterials,
+  type SettlementHouseSetConfig,
 } from './pieces';
 import {
   buildHexTileGroup,
   createCoastalShipMesh,
   createTabletopAndOcean,
   createTerrainAssets,
+  DEFAULT_TERRAIN_ELEVATION_PROFILES,
+  DEFAULT_TERRAIN_MESH_FIDELITY,
   type TerrainAssets,
+  type TerrainElevationProfile,
+  type TerrainMeshFidelityConfig,
+  type TerrainTileBuildResult,
 } from './terrain';
 import { createProceduralTextureSet, type ProceduralTextureSet } from './textures';
 import type { QualityPreset } from '../store/useGameStore';
@@ -29,12 +38,52 @@ export interface ValidHighlights {
   edges: string[];
   cities: string[];
   robberHexes: string[];
+  flipHexes: string[];
 }
 
 export interface BoardInteractionCallbacks {
   onSelectVertex: (vertexId: string) => void;
   onSelectEdge: (edgeId: string) => void;
   onSelectHex: (hexId: string) => void;
+}
+
+export interface PostProcessingPipeline {
+  render: (focusDistance: number, quality: QualityPreset, reducedMotion: boolean) => void;
+  setSize: (width: number, height: number, pixelRatio: number) => void;
+  dispose: () => void;
+}
+
+export interface TileFlipAnimationConfig {
+  randomizedCascade: boolean;
+  staggerIntervalSec: number;
+  flipSpeed: number;
+  arcLiftHeight: number;
+  rollWobbleRad: number;
+  preGameShuffleRipple: boolean;
+}
+
+export const DEFAULT_TILE_FLIP_ANIMATION: TileFlipAnimationConfig = {
+  randomizedCascade: true,
+  staggerIntervalSec: 0.048,
+  flipSpeed: 2.05,
+  arcLiftHeight: 0.56,
+  rollWobbleRad: 0.24,
+  preGameShuffleRipple: true,
+};
+
+export interface BoardSceneOptions {
+  terrainElevationProfiles?: Record<TerrainType, TerrainElevationProfile>;
+  terrainMeshFidelity?: TerrainMeshFidelityConfig;
+  settlementHouseSet?: SettlementHouseSetConfig;
+  tileFlipAnimation?: TileFlipAnimationConfig;
+  createPostProcessing?: (ctx: {
+    renderer: THREE.WebGLRenderer;
+    scene: THREE.Scene;
+    camera: THREE.PerspectiveCamera;
+    width: number;
+    height: number;
+    pixelRatio: number;
+  }) => PostProcessingPipeline;
 }
 
 interface BurstParticle {
@@ -47,6 +96,15 @@ interface BurstParticle {
   age: number;
   life: number;
   scale: number;
+}
+
+interface BuildEffect {
+  ring: THREE.Mesh;
+  outerRing: THREE.Mesh | null;
+  beam: THREE.Mesh;
+  age: number;
+  life: number;
+  maxScale: number;
 }
 
 const _vec3 = new THREE.Vector3();
@@ -99,9 +157,13 @@ export class BoardSceneController {
 
   private burstMesh: THREE.InstancedMesh;
   private burstParticles: BurstParticle[] = [];
+  private buildEffectGroup = new THREE.Group();
+  private buildEffectRingGeo: THREE.RingGeometry;
+  private buildEffectBeamGeo: THREE.CylinderGeometry;
+  private buildEffects: BuildEffect[] = [];
 
   private robberMesh: THREE.Group;
-  private robberTargetPos = new THREE.Vector3(0, 0.25, 0);
+  private robberTargetPos = new THREE.Vector3(0, 0.355, 0);
 
   private die1: THREE.Mesh;
   private die2: THREE.Mesh;
@@ -118,6 +180,49 @@ export class BoardSceneController {
     string,
     { ownerId: string; mesh: THREE.Group; spawnAge: number }
   >();
+
+  private elevationProfiles: Record<TerrainType, TerrainElevationProfile>;
+  private meshFidelity: TerrainMeshFidelityConfig;
+  private settlementHouseSet: SettlementHouseSetConfig;
+  private tileFlipConfig: TileFlipAnimationConfig;
+  private tileEntries: Array<
+    TerrainTileBuildResult & {
+      targetRevealed: boolean;
+      flipProgress: number;
+      flipDelay: number;
+      flipRollDir: number;
+      flipYawDir: number;
+      shuffleDelayRatio: number;
+      hexX: number;
+      hexZ: number;
+      burstSpawned: boolean;
+    }
+  > = [];
+  private tileEntryById = new Map<
+    string,
+    TerrainTileBuildResult & {
+      targetRevealed: boolean;
+      flipProgress: number;
+      flipDelay: number;
+      flipRollDir: number;
+      flipYawDir: number;
+      shuffleDelayRatio: number;
+      hexX: number;
+      hexZ: number;
+      burstSpawned: boolean;
+    }
+  >();
+  private lastShuffleSeq = 0;
+  private shuffleAnimTime = -1;
+  private hasPlayedInitialBlindDeal = false;
+  private hoverFlipRing: THREE.Mesh | null = null;
+  private hoverFlipRingGeo: THREE.RingGeometry;
+  private hoverFlipRingMat: THREE.MeshBasicMaterial;
+
+  private tooltipWorldPos: THREE.Vector3 | null = null;
+  private onTooltipScreenPos: ((pos: { x: number; y: number; visible: boolean } | null) => void) | null =
+    null;
+  private lastProjectedTooltip: { x: number; y: number; visible: boolean } | null = null;
 
   private interactables: THREE.Object3D[] = [];
   private raycaster = new THREE.Raycaster();
@@ -141,14 +246,34 @@ export class BoardSceneController {
   private disposed = false;
   private resizeObserver: ResizeObserver;
   private keyLight: THREE.DirectionalLight;
+  private postProcessing: PostProcessingPipeline | null = null;
 
   constructor(
     container: HTMLElement,
     callbacksRef: { current: BoardInteractionCallbacks },
+    options?: BoardSceneOptions,
   ) {
     this.container = container;
     this.callbacksRef = callbacksRef;
+    this.elevationProfiles =
+      options?.terrainElevationProfiles ?? DEFAULT_TERRAIN_ELEVATION_PROFILES;
+    this.meshFidelity =
+      options?.terrainMeshFidelity ?? DEFAULT_TERRAIN_MESH_FIDELITY;
+    this.settlementHouseSet =
+      options?.settlementHouseSet ?? DEFAULT_SETTLEMENT_HOUSE_SET;
+    this.tileFlipConfig =
+      options?.tileFlipAnimation ?? DEFAULT_TILE_FLIP_ANIMATION;
     this.isSoftwareGl = detectSoftwareGl();
+
+    this.hoverFlipRingGeo = new THREE.RingGeometry(1.16, 1.31, 6);
+    this.hoverFlipRingGeo.rotateX(-Math.PI / 2);
+    this.hoverFlipRingMat = new THREE.MeshBasicMaterial({
+      color: 0xf7c954,
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
 
     const width = Math.max(1, container.clientWidth);
     const height = Math.max(1, container.clientHeight);
@@ -159,7 +284,7 @@ export class BoardSceneController {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.toneMappingExposure = 0.96;
     this.renderer.setPixelRatio(
       this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2),
     );
@@ -174,6 +299,7 @@ export class BoardSceneController {
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.52;
     pmrem.dispose();
 
     this.camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 120);
@@ -191,12 +317,12 @@ export class BoardSceneController {
       this.cameraPresetTarget = null;
     });
 
-    // Studio warm/cool 3-point lighting rig
-    const hemi = new THREE.HemisphereLight(0xb5d3ef, 0x3b2c1e, 0.88);
+    // Studio warm/cool 3-point lighting rig (sculpting sun angle for rich bevel & terrain shadows)
+    const hemi = new THREE.HemisphereLight(0xa6ceec, 0x2f2318, 0.58);
     this.scene.add(hemi);
 
-    this.keyLight = new THREE.DirectionalLight(0xfff1d6, 2.05);
-    this.keyLight.position.set(9, 15, 8);
+    this.keyLight = new THREE.DirectionalLight(0xfff0d1, 2.0);
+    this.keyLight.position.set(11.5, 11.5, 9.0);
     this.keyLight.castShadow = !this.isSoftwareGl;
     this.keyLight.shadow.mapSize.set(1024, 1024);
     const d = 10.5;
@@ -210,8 +336,8 @@ export class BoardSceneController {
     this.keyLight.shadow.normalBias = 0.02;
     this.scene.add(this.keyLight);
 
-    const rimLight = new THREE.DirectionalLight(0x7eb8e6, 0.78);
-    rimLight.position.set(-10, 8, -9);
+    const rimLight = new THREE.DirectionalLight(0xffdea6, 0.65);
+    rimLight.position.set(-10, 7.5, -9);
     this.scene.add(rimLight);
 
     // Build procedural textures & material libraries
@@ -269,7 +395,13 @@ export class BoardSceneController {
     });
     this.burstMesh = new THREE.InstancedMesh(burstGeo, burstMat, MAX_BURST_PARTICLES);
     this.burstMesh.count = 0;
+    this.burstMesh.layers.enable(BLOOM_LAYER);
     this.scene.add(this.burstMesh);
+
+    this.buildEffectRingGeo = new THREE.RingGeometry(0.24, 0.34, 32);
+    this.buildEffectRingGeo.rotateX(-Math.PI / 2);
+    this.buildEffectBeamGeo = new THREE.CylinderGeometry(0.16, 0.34, 1.85, 16, 1, true);
+    this.scene.add(this.buildEffectGroup);
 
     this.robberMesh = createRobberMesh(this.pieceMats);
     this.robberMesh.position.copy(this.robberTargetPos);
@@ -287,6 +419,17 @@ export class BoardSceneController {
     // Load showcase island immediately for Title Screen
     const showcase = generateBoard('standard');
     this.rebuildTerrain(showcase.hexes, showcase.harbors);
+
+    if (!this.isSoftwareGl && options?.createPostProcessing) {
+      this.postProcessing = options.createPostProcessing({
+        renderer: this.renderer,
+        scene: this.scene,
+        camera: this.camera,
+        width,
+        height,
+        pixelRatio: this.renderer.getPixelRatio(),
+      });
+    }
 
     if (!this.isSoftwareGl) {
       this.renderer.compile(this.scene, this.camera);
@@ -323,6 +466,7 @@ export class BoardSceneController {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
+    this.postProcessing?.setSize(w, h, this.renderer.getPixelRatio());
   }
 
   private updatePointerNDC(e: PointerEvent) {
@@ -350,9 +494,19 @@ export class BoardSceneController {
       if (hit) {
         this.hoveredProxy = hit;
         this.renderer.domElement.style.cursor = 'pointer';
-        const kind = hit.userData.kind as 'vertex' | 'edge' | 'city' | 'hex';
+        const kind = hit.userData.kind as
+          | 'vertex'
+          | 'edge'
+          | 'city'
+          | 'hex'
+          | 'flip_hex';
         if (kind === 'vertex') {
-          this.hoverGhost = createSettlementMesh('ghost', this.pieceMats);
+          this.hoverGhost = createSettlementMesh(
+            'ghost',
+            this.pieceMats,
+            hit.userData.id as string,
+            this.settlementHouseSet,
+          );
           this.hoverGhost.position.copy(hit.position);
           this.hoverGhost.position.y = 0.25;
           this.highlightGroup.add(this.hoverGhost);
@@ -367,6 +521,11 @@ export class BoardSceneController {
           this.hoverGhost.position.y = 0.25;
           this.hoverGhost.rotation.y = -(hit.userData.angle ?? 0);
           this.highlightGroup.add(this.hoverGhost);
+        } else if (kind === 'flip_hex') {
+          const ring = new THREE.Mesh(this.hoverFlipRingGeo, this.hoverFlipRingMat);
+          ring.position.set(hit.position.x, 0.375, hit.position.z);
+          this.hoverFlipRing = ring;
+          this.highlightGroup.add(ring);
         }
       }
     }
@@ -375,7 +534,12 @@ export class BoardSceneController {
   private clearHover() {
     if (this.hoverGhost) {
       this.highlightGroup.remove(this.hoverGhost);
+      disposePieceGroupGeometries(this.hoverGhost, this.pieceMats);
       this.hoverGhost = null;
+    }
+    if (this.hoverFlipRing) {
+      this.highlightGroup.remove(this.hoverFlipRing);
+      this.hoverFlipRing = null;
     }
     this.hoveredProxy = null;
     this.renderer.domElement.style.cursor = 'grab';
@@ -395,14 +559,19 @@ export class BoardSceneController {
     if (hits.length === 0) return;
 
     const target = hits[0].object;
-    const kind = target.userData.kind as 'vertex' | 'edge' | 'city' | 'hex';
+    const kind = target.userData.kind as
+      | 'vertex'
+      | 'edge'
+      | 'city'
+      | 'hex'
+      | 'flip_hex';
     const id = target.userData.id as string;
 
     if (kind === 'vertex' || kind === 'city') {
       this.callbacksRef.current.onSelectVertex(id);
     } else if (kind === 'edge') {
       this.callbacksRef.current.onSelectEdge(id);
-    } else if (kind === 'hex') {
+    } else if (kind === 'hex' || kind === 'flip_hex') {
       this.callbacksRef.current.onSelectHex(id);
     }
   };
@@ -429,6 +598,59 @@ export class BoardSceneController {
     }
   }
 
+  private spawnBuildCelebration(x: number, z: number, isCityUpgrade: boolean) {
+    if (this.reducedMotion || this.quality === 'reduced') return;
+
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: isCityUpgrade ? 0xffe48a : 0xf7c954,
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const ring = new THREE.Mesh(this.buildEffectRingGeo, ringMat);
+    ring.position.set(x, 0.28, z);
+    ring.layers.enable(BLOOM_LAYER);
+    this.buildEffectGroup.add(ring);
+
+    let outerRing: THREE.Mesh | null = null;
+    if (isCityUpgrade) {
+      const outerMat = new THREE.MeshBasicMaterial({
+        color: 0xffc64b,
+        transparent: true,
+        opacity: 0.75,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      outerRing = new THREE.Mesh(this.buildEffectRingGeo, outerMat);
+      outerRing.position.set(x, 0.29, z);
+      outerRing.layers.enable(BLOOM_LAYER);
+      this.buildEffectGroup.add(outerRing);
+    }
+
+    const beamMat = new THREE.MeshBasicMaterial({
+      color: isCityUpgrade ? 0xffe49c : 0xf5d06e,
+      transparent: true,
+      opacity: isCityUpgrade ? 0.34 : 0.22,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const beam = new THREE.Mesh(this.buildEffectBeamGeo, beamMat);
+    beam.position.set(x, isCityUpgrade ? 1.15 : 0.95, z);
+    beam.scale.set(isCityUpgrade ? 1.25 : 0.88, isCityUpgrade ? 1.25 : 0.85, isCityUpgrade ? 1.25 : 0.88);
+    beam.layers.enable(BLOOM_LAYER);
+    this.buildEffectGroup.add(beam);
+
+    this.buildEffects.push({
+      ring,
+      outerRing,
+      beam,
+      age: 0,
+      life: isCityUpgrade ? 1.15 : 0.8,
+      maxScale: isCityUpgrade ? 3.05 : 2.35,
+    });
+  }
+
   public setMode(mode: 'title' | 'game') {
     if (this.mode === mode) return;
     this.mode = mode;
@@ -451,6 +673,39 @@ export class BoardSceneController {
     this.autoCameraFocus = autoFocus;
   }
 
+  public setTooltipAnchor(
+    worldPos: { x: number; y: number; z: number } | null,
+    onProject: ((pos: { x: number; y: number; visible: boolean } | null) => void) | null,
+  ) {
+    this.tooltipWorldPos = worldPos
+      ? new THREE.Vector3(worldPos.x, worldPos.y, worldPos.z)
+      : null;
+    this.onTooltipScreenPos = onProject;
+    this.lastProjectedTooltip = null;
+    if (!worldPos && onProject) {
+      onProject(null);
+    }
+  }
+
+  public projectWorldPoint(
+    x: number,
+    y: number,
+    z: number,
+  ): { x: number; y: number; visible: boolean } | null {
+    if (this.disposed) return null;
+    this.camera.updateMatrixWorld();
+    _vec3.set(x, y, z).project(this.camera);
+    const visible = _vec3.z >= -1 && _vec3.z <= 1;
+    const rect = this.container.getBoundingClientRect();
+    const w = Math.max(1, rect.width || this.container.clientWidth);
+    const h = Math.max(1, rect.height || this.container.clientHeight);
+    return {
+      x: rect.left + (_vec3.x * 0.5 + 0.5) * w,
+      y: rect.top + (-_vec3.y * 0.5 + 0.5) * h,
+      visible,
+    };
+  }
+
   public setQuality(quality: QualityPreset) {
     this.quality = quality;
     this.ambientMotes.visible = !this.reducedMotion && quality !== 'reduced';
@@ -468,6 +723,9 @@ export class BoardSceneController {
       this.renderer.shadowMap.enabled = false;
       this.keyLight.castShadow = false;
     }
+    const w = Math.max(1, this.container.clientWidth);
+    const h = Math.max(1, this.container.clientHeight);
+    this.postProcessing?.setSize(w, h, this.renderer.getPixelRatio());
   }
 
   public setCameraPreset(preset: 'reset' | 'top' | 'iso' | 'dice') {
@@ -498,6 +756,12 @@ export class BoardSceneController {
     this.currentBoardSignature = sig;
     this.currentHexesCache = hexes;
 
+    for (const entry of this.tileEntries) {
+      entry.disposeCustomGeometries();
+    }
+    this.tileEntries = [];
+    this.tileEntryById.clear();
+
     this.hexGroup.clear();
     this.harborGroup.clear();
     this.swayTrees = [];
@@ -506,10 +770,31 @@ export class BoardSceneController {
     this.cityBanners = [];
 
     for (const hex of hexes) {
-      const built = buildHexTileGroup(hex, this.terrainAssets, this.textures);
+      const built = buildHexTileGroup(
+        hex,
+        this.terrainAssets,
+        this.textures,
+        this.elevationProfiles,
+        this.meshFidelity,
+      );
       this.hexGroup.add(built.group);
       this.swayTrees.push(...built.swayTrees);
       this.windmills.push(...built.windmills);
+      built.plainBackGroup.visible = !hex.revealed;
+      const entry = {
+        ...built,
+        targetRevealed: hex.revealed,
+        flipProgress: hex.revealed ? 1 : 0,
+        flipDelay: 0,
+        flipRollDir: (Math.random() > 0.5 ? 1 : -1) * (0.7 + Math.random() * 0.6),
+        flipYawDir: Math.random() > 0.5 ? 1 : -1,
+        shuffleDelayRatio: Math.random(),
+        hexX: hex.x,
+        hexZ: hex.z,
+        burstSpawned: hex.revealed,
+      };
+      this.tileEntries.push(entry);
+      this.tileEntryById.set(hex.id, entry);
     }
 
     for (const harbor of harbors) {
@@ -523,9 +808,15 @@ export class BoardSceneController {
       }
     }
 
-    this.builtVertices.forEach((v) => this.piecesGroup.remove(v.mesh));
+    this.builtVertices.forEach((v) => {
+      this.piecesGroup.remove(v.mesh);
+      disposePieceGroupGeometries(v.mesh, this.pieceMats);
+    });
     this.builtVertices.clear();
-    this.builtEdges.forEach((e) => this.piecesGroup.remove(e.mesh));
+    this.builtEdges.forEach((e) => {
+      this.piecesGroup.remove(e.mesh);
+      disposePieceGroupGeometries(e.mesh, this.pieceMats);
+    });
     this.builtEdges.clear();
   }
 
@@ -534,11 +825,81 @@ export class BoardSceneController {
     highlights: ValidHighlights,
   ) {
     if (!game) {
-      this.updateHighlights([], [], [], [], game);
+      this.hasPlayedInitialBlindDeal = false;
+      this.updateHighlights([], [], [], [], [], game);
       return;
     }
 
+    const sigBefore = this.currentBoardSignature;
     this.rebuildTerrain(game.hexes, game.harbors);
+    const boardChanged = this.currentBoardSignature !== sigBefore;
+
+    // Trigger randomized tabletop shuffle ripple on explicit shuffle OR first blind-start entry
+    if (game.shuffleSeq !== this.lastShuffleSeq) {
+      if (game.shuffleSeq > 0) {
+        this.shuffleAnimTime = this.reducedMotion ? -1 : 0;
+        for (const entry of this.tileEntries) {
+          entry.shuffleDelayRatio = Math.random();
+        }
+      }
+      this.lastShuffleSeq = game.shuffleSeq;
+    } else if (
+      game.phase === 'tile_reveal' &&
+      this.tileFlipConfig.preGameShuffleRipple &&
+      (!this.hasPlayedInitialBlindDeal || boardChanged) &&
+      !this.reducedMotion
+    ) {
+      this.hasPlayedInitialBlindDeal = true;
+      this.shuffleAnimTime = 0;
+      for (const entry of this.tileEntries) {
+        entry.shuffleDelayRatio = Math.random();
+      }
+    }
+
+    // Sync tile flip reveal states with randomized cascade delays & per-tile wrist tilt
+    const newlyRevealedEntries: typeof this.tileEntries = [];
+    for (const hex of game.hexes) {
+      const entry = this.tileEntryById.get(hex.id);
+      if (!entry) continue;
+      if (hex.revealed !== entry.targetRevealed) {
+        entry.targetRevealed = hex.revealed;
+        if (hex.revealed) {
+          entry.burstSpawned = false;
+          entry.flipRollDir = (Math.random() > 0.5 ? 1 : -1) * (0.7 + Math.random() * 0.6);
+          entry.flipYawDir = Math.random() > 0.5 ? 1 : -1;
+          newlyRevealedEntries.push(entry);
+        } else {
+          entry.flipDelay = 0;
+        }
+        if (this.reducedMotion) {
+          entry.flipProgress = hex.revealed ? 1 : 0;
+          entry.flipPivot.rotation.set(hex.revealed ? 0 : Math.PI, 0, 0);
+          entry.flipPivot.position.y = 0.285;
+          entry.biomeGroup.visible = hex.revealed;
+          entry.plainBackGroup.visible = !hex.revealed;
+          entry.tokenMountGroup.position.y = hex.revealed
+            ? entry.revealedTokenY
+            : entry.unrevealedTokenY;
+        }
+      }
+    }
+
+    if (newlyRevealedEntries.length > 1 && !this.reducedMotion) {
+      const orderIndices = newlyRevealedEntries.map((_, idx) => idx);
+      if (this.tileFlipConfig.randomizedCascade) {
+        for (let i = orderIndices.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [orderIndices[i], orderIndices[j]] = [orderIndices[j], orderIndices[i]];
+        }
+      }
+      for (let i = 0; i < newlyRevealedEntries.length; i++) {
+        const orderSlot = orderIndices[i];
+        newlyRevealedEntries[i].flipDelay =
+          orderSlot * this.tileFlipConfig.staggerIntervalSec + Math.random() * 0.025;
+      }
+    } else if (newlyRevealedEntries.length === 1) {
+      newlyRevealedEntries[0].flipDelay = 0;
+    }
 
     const playerColorById = new Map(game.players.map((p) => [p.id, p.color]));
 
@@ -548,6 +909,7 @@ export class BoardSceneController {
       if (!v.building) {
         if (existing) {
           this.piecesGroup.remove(existing.mesh);
+          disposePieceGroupGeometries(existing.mesh, this.pieceMats);
           this.builtVertices.delete(v.id);
         }
         continue;
@@ -558,14 +920,25 @@ export class BoardSceneController {
         existing.ownerId !== v.building.ownerId ||
         existing.type !== v.building.type
       ) {
+        const isInitialLoad =
+          this.builtVertices.size === 0 &&
+          (game.turnNumber > 1 || game.phase === 'roll');
         const wasUpgrade = Boolean(existing && v.building.type === 'city');
-        if (existing) this.piecesGroup.remove(existing.mesh);
+        if (existing) {
+          this.piecesGroup.remove(existing.mesh);
+          disposePieceGroupGeometries(existing.mesh, this.pieceMats);
+        }
         const color = playerColorById.get(v.building.ownerId) ?? 'crimson';
         const mesh =
           v.building.type === 'city'
             ? createCityMesh(color, this.pieceMats)
-            : createSettlementMesh(color, this.pieceMats);
-        mesh.position.set(v.x, 0.24, v.z);
+            : createSettlementMesh(
+                color,
+                this.pieceMats,
+                v.id,
+                this.settlementHouseSet,
+              );
+        mesh.position.set(v.x, 0.245, v.z);
         mesh.rotation.y = Math.atan2(-v.x, -v.z);
         mesh.scale.setScalar(this.reducedMotion ? 1 : 0.01);
         this.piecesGroup.add(mesh);
@@ -579,7 +952,11 @@ export class BoardSceneController {
           this.cityBanners.push(mesh.userData.bannerPivot);
         }
         if (wasUpgrade) {
-          this.spawnBurst(v.x, 0.75, v.z, 12);
+          this.spawnBurst(v.x, 1.05, v.z, 22);
+          this.spawnBuildCelebration(v.x, v.z, true);
+        } else if (!isInitialLoad) {
+          this.spawnBurst(v.x, 0.74, v.z, 12);
+          this.spawnBuildCelebration(v.x, v.z, false);
         }
       }
     }
@@ -607,13 +984,22 @@ export class BoardSceneController {
           mesh,
           spawnAge: this.reducedMotion ? 0.35 : 0,
         });
+        if (this.builtEdges.size > 1) {
+          this.spawnBurst(e.x, 0.45, e.z, 5);
+        }
       }
     }
 
-    // Sync robber position
+    // Sync robber position & hide while desert tile is still upside down
     const robberHex = game.hexes.find((h) => h.hasRobber);
     if (robberHex) {
-      this.robberTargetPos.set(robberHex.x + 0.32, 0.28, robberHex.z + 0.28);
+      this.robberTargetPos.set(robberHex.x + 0.32, 0.355, robberHex.z + 0.28);
+      const robberEntry = this.tileEntryById.get(robberHex.id);
+      this.robberMesh.visible = Boolean(
+        robberHex.revealed && (!robberEntry || robberEntry.flipProgress > 0.75),
+      );
+    } else {
+      this.robberMesh.visible = false;
     }
 
     // Trigger 3D dice roll animation & producing hex harvest sparkles
@@ -648,6 +1034,7 @@ export class BoardSceneController {
       highlights.edges,
       highlights.cities,
       highlights.robberHexes,
+      highlights.flipHexes,
       game,
     );
   }
@@ -657,6 +1044,7 @@ export class BoardSceneController {
     edgeIds: string[],
     cityIds: string[],
     robberHexIds: string[],
+    flipHexIds: string[],
     game: PublicGameState | null,
   ) {
     this.clearHover();
@@ -678,7 +1066,7 @@ export class BoardSceneController {
       const v = vertexById.get(vId);
       if (!v) continue;
       const ring = new THREE.Mesh(ringGeo, ringMat);
-      ring.position.set(v.x, 0.285, v.z);
+      ring.position.set(v.x, 0.275, v.z);
       this.highlightGroup.add(ring);
 
       const proxy = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.4, 8), proxyMat);
@@ -692,14 +1080,14 @@ export class BoardSceneController {
       const v = vertexById.get(vId);
       if (!v) continue;
       const ring = new THREE.Mesh(
-        new THREE.RingGeometry(0.28, 0.41, 24).rotateX(-Math.PI / 2),
+        new THREE.RingGeometry(0.32, 0.46, 24).rotateX(-Math.PI / 2),
         ringMat,
       );
-      ring.position.set(v.x, 0.285, v.z);
+      ring.position.set(v.x, 0.275, v.z);
       this.highlightGroup.add(ring);
 
-      const proxy = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.6, 8), proxyMat);
-      proxy.position.set(v.x, 0.42, v.z);
+      const proxy = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.7, 8), proxyMat);
+      proxy.position.set(v.x, 0.48, v.z);
       proxy.userData = { kind: 'city', id: vId };
       this.highlightGroup.add(proxy);
       this.interactables.push(proxy);
@@ -717,7 +1105,7 @@ export class BoardSceneController {
       const e = edgeById.get(eId);
       if (!e) continue;
       const marker = new THREE.Mesh(edgeBarGeo, edgeBarMat);
-      marker.position.set(e.x, 0.28, e.z);
+      marker.position.set(e.x, 0.275, e.z);
       marker.rotation.y = -e.angle;
       marker.userData = { kind: 'edge', id: eId, angle: e.angle };
       this.highlightGroup.add(marker);
@@ -736,14 +1124,27 @@ export class BoardSceneController {
       const h = hexById.get(hId);
       if (!h) continue;
       const ring = new THREE.Mesh(hexRingGeo, robberMat);
-      ring.position.set(h.x, 0.31, h.z);
+      ring.position.set(h.x, 0.375, h.z);
       this.highlightGroup.add(ring);
 
       const proxy = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 0.4, 6), proxyMat);
-      proxy.position.set(h.x, 0.38, h.z);
+      proxy.position.set(h.x, 0.44, h.z);
       proxy.userData = { kind: 'hex', id: hId };
       this.highlightGroup.add(proxy);
       this.interactables.push(proxy);
+    }
+
+    if (flipHexIds.length > 0) {
+      const flipProxyGeo = new THREE.CylinderGeometry(1.38, 1.38, 0.38, 6);
+      for (const hId of flipHexIds) {
+        const h = hexById.get(hId);
+        if (!h) continue;
+        const proxy = new THREE.Mesh(flipProxyGeo, proxyMat);
+        proxy.position.set(h.x, 0.34, h.z);
+        proxy.userData = { kind: 'flip_hex', id: hId };
+        this.highlightGroup.add(proxy);
+        this.interactables.push(proxy);
+      }
     }
   }
 
@@ -774,6 +1175,7 @@ export class BoardSceneController {
     const rawDt = (now - this.lastTimeMs) / 1000;
     this.lastTimeMs = now;
     const dt = Math.min(Math.max(rawDt, 0.001), 0.05);
+    const animDt = Math.min(Math.max(rawDt, 0.001), 0.25);
     const elapsed = (now - this.startTimeMs) / 1000;
 
     // 1. Ocean shader animation (unless reduced quality/motion)
@@ -903,6 +1305,45 @@ export class BoardSceneController {
       }
     }
 
+    // 5b. Celebratory golden consecration rings & beacon fade-out
+    if (this.buildEffects.length > 0) {
+      let writeIdx = 0;
+      for (let i = 0; i < this.buildEffects.length; i++) {
+        const fx = this.buildEffects[i];
+        fx.age += dt;
+        if (fx.age >= fx.life) {
+          this.buildEffectGroup.remove(fx.ring);
+          (fx.ring.material as THREE.Material).dispose();
+          if (fx.outerRing) {
+            this.buildEffectGroup.remove(fx.outerRing);
+            (fx.outerRing.material as THREE.Material).dispose();
+          }
+          this.buildEffectGroup.remove(fx.beam);
+          (fx.beam.material as THREE.Material).dispose();
+          continue;
+        }
+        const p = fx.age / fx.life;
+        const easeOut = 1 - Math.pow(1 - p, 3);
+        const fade = Math.pow(1 - p, 1.5);
+        fx.ring.scale.setScalar(1 + easeOut * (fx.maxScale - 1));
+        (fx.ring.material as THREE.MeshBasicMaterial).opacity = 0.85 * fade;
+
+        if (fx.outerRing) {
+          const p2 = Math.max(0, (p - 0.14) / 0.86);
+          const ease2 = 1 - Math.pow(1 - p2, 3);
+          fx.outerRing.scale.setScalar(0.9 + ease2 * (fx.maxScale * 1.15 - 0.9));
+          (fx.outerRing.material as THREE.MeshBasicMaterial).opacity = 0.65 * Math.pow(1 - p2, 1.4);
+        }
+
+        const beamFade = Math.sin(Math.min(1, p * 1.35) * Math.PI) * (1 - p);
+        (fx.beam.material as THREE.MeshBasicMaterial).opacity = 0.34 * Math.max(0, beamFade);
+
+        this.buildEffects[writeIdx] = fx;
+        writeIdx++;
+      }
+      this.buildEffects.length = writeIdx;
+    }
+
     // 6. Robber smooth glide with slight hop
     const distToRobber = this.robberMesh.position.distanceTo(this.robberTargetPos);
     if (distToRobber > 0.01) {
@@ -919,17 +1360,17 @@ export class BoardSceneController {
 
     // 7. Physical 3D dice tumble & bounce settle
     if (this.diceAnimTime >= 0) {
-      this.diceAnimTime += dt;
+      this.diceAnimTime += animDt;
       const dur = 0.85;
       if (this.diceAnimTime < dur) {
         const p = this.diceAnimTime / dur;
         const bounce = Math.abs(Math.sin(p * Math.PI * 3)) * (1 - p) * 1.65;
         this.die1.position.y = 0.76 + bounce;
         this.die2.position.y = 0.76 + bounce * 0.85;
-        this.die1.rotation.x += dt * 16 * (1 - p);
-        this.die1.rotation.z += dt * 13 * (1 - p);
-        this.die2.rotation.x -= dt * 14 * (1 - p);
-        this.die2.rotation.y += dt * 15 * (1 - p);
+        this.die1.rotation.x += animDt * 16 * (1 - p);
+        this.die1.rotation.z += animDt * 13 * (1 - p);
+        this.die2.rotation.x -= animDt * 14 * (1 - p);
+        this.die2.rotation.y += animDt * 15 * (1 - p);
       } else {
         this.die1.position.y = 0.76;
         this.die2.position.y = 0.76;
@@ -939,7 +1380,132 @@ export class BoardSceneController {
       }
     }
 
-    this.renderer.render(this.scene, this.camera);
+    // 7b. Physical 3D randomized tile flip reveal & shuffle ripple animations
+    for (let i = 0; i < this.tileEntries.length; i++) {
+      const entry = this.tileEntries[i];
+      const target = entry.targetRevealed ? 1 : 0;
+      if (Math.abs(entry.flipProgress - target) > 0.0005) {
+        if (entry.flipDelay > 0) {
+          const remaining = entry.flipDelay - animDt;
+          if (remaining > 0) {
+            entry.flipDelay = remaining;
+            continue;
+          }
+          entry.flipDelay = 0;
+        }
+        if (this.reducedMotion) {
+          entry.flipProgress = target;
+        } else {
+          const speed = this.tileFlipConfig.flipSpeed;
+          if (entry.flipProgress < target) {
+            entry.flipProgress = Math.min(1, entry.flipProgress + animDt * speed);
+          } else {
+            entry.flipProgress = Math.max(0, entry.flipProgress - animDt * speed);
+          }
+        }
+        const raw = entry.flipProgress;
+        const p =
+          raw < 0.5 ? 4 * raw * raw * raw : 1 - Math.pow(-2 * raw + 2, 3) / 2;
+        const arc = Math.sin(p * Math.PI);
+        const settleOvershoot = raw > 0.78 ? Math.sin(((raw - 0.78) / 0.22) * Math.PI) * 0.045 : 0;
+
+        entry.flipPivot.rotation.x = (1 - p) * Math.PI;
+        entry.flipPivot.rotation.z =
+          arc * this.tileFlipConfig.rollWobbleRad * entry.flipRollDir;
+        entry.flipPivot.rotation.y =
+          arc * 0.16 * entry.flipYawDir;
+        entry.flipPivot.position.y =
+          0.285 + arc * this.tileFlipConfig.arcLiftHeight + settleOvershoot;
+
+        const showBiome = entry.flipPivot.rotation.x < Math.PI * 0.48;
+        entry.biomeGroup.visible = showBiome;
+        entry.plainBackGroup.visible = !showBiome;
+        entry.tokenMountGroup.position.y =
+          THREE.MathUtils.lerp(entry.unrevealedTokenY, entry.revealedTokenY, p) +
+          arc * (this.tileFlipConfig.arcLiftHeight + 0.14);
+
+        if (raw >= 1 || raw <= 0) {
+          entry.flipPivot.rotation.set(target === 1 ? 0 : Math.PI, 0, 0);
+          entry.flipPivot.position.y = 0.285;
+          entry.tokenMountGroup.position.y =
+            target === 1 ? entry.revealedTokenY : entry.unrevealedTokenY;
+        }
+
+        if (!entry.burstSpawned && target === 1 && raw >= 0.88) {
+          entry.burstSpawned = true;
+          this.spawnBurst(entry.hexX, 0.48, entry.hexZ, 7);
+        }
+      }
+    }
+
+    if (!this.robberMesh.visible) {
+      const robberHex = this.currentHexesCache.find((h) => h.hasRobber);
+      if (robberHex) {
+        const robberEntry = this.tileEntryById.get(robberHex.id);
+        if (robberEntry && robberEntry.targetRevealed && robberEntry.flipProgress > 0.75) {
+          this.robberMesh.visible = true;
+        }
+      }
+    }
+
+    if (this.shuffleAnimTime >= 0) {
+      this.shuffleAnimTime += animDt;
+      const totalDur = 0.82;
+      if (this.shuffleAnimTime < totalDur) {
+        for (let i = 0; i < this.tileEntries.length; i++) {
+          const entry = this.tileEntries[i];
+          const delay = entry.shuffleDelayRatio * 0.28;
+          const localP = Math.max(0, Math.min(1, (this.shuffleAnimTime - delay) / 0.48));
+          const lift = Math.sin(localP * Math.PI);
+          entry.group.position.y = lift * 0.52;
+          entry.group.rotation.y = Math.sin(localP * Math.PI * 2) * 0.22 * entry.flipYawDir;
+          if (!entry.targetRevealed && entry.flipProgress < 0.02) {
+            // Subtle face-down wrist-peek wobble on unrevealed tiles during pre-game shuffle
+            entry.flipPivot.rotation.x = Math.PI - lift * 0.22;
+            entry.flipPivot.rotation.z = lift * 0.14 * entry.flipRollDir;
+          }
+        }
+      } else {
+        for (let i = 0; i < this.tileEntries.length; i++) {
+          const entry = this.tileEntries[i];
+          entry.group.position.y = 0;
+          entry.group.rotation.y = 0;
+          if (!entry.targetRevealed && entry.flipProgress < 0.02) {
+            entry.flipPivot.rotation.set(Math.PI, 0, 0);
+          }
+        }
+        this.shuffleAnimTime = -1;
+      }
+    }
+
+    // 8. Guarded 3D-to-screen projection for live TV-board contextual tooltip
+    if (this.tooltipWorldPos && this.onTooltipScreenPos && this.mode === 'game') {
+      _vec3.copy(this.tooltipWorldPos).project(this.camera);
+      const visible = _vec3.z >= -1 && _vec3.z <= 1;
+      const w = Math.max(1, this.container.clientWidth);
+      const h = Math.max(1, this.container.clientHeight);
+      const rawX = (_vec3.x * 0.5 + 0.5) * w;
+      const rawY = (-_vec3.y * 0.5 + 0.5) * h;
+      const px = Math.round(Math.max(185, Math.min(w - 185, rawX)));
+      const py = Math.round(Math.max(170, Math.min(h - 145, rawY)));
+      const prev = this.lastProjectedTooltip;
+      if (
+        !prev ||
+        prev.visible !== visible ||
+        Math.abs(prev.x - px) > 0.75 ||
+        Math.abs(prev.y - py) > 0.75
+      ) {
+        this.lastProjectedTooltip = { x: px, y: py, visible };
+        this.onTooltipScreenPos(this.lastProjectedTooltip);
+      }
+    }
+
+    if (this.postProcessing && !this.isSoftwareGl && this.quality !== 'reduced') {
+      const focusDistance = this.camera.position.distanceTo(this.controls.target);
+      this.postProcessing.render(focusDistance, this.quality, this.reducedMotion);
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
 
     if (this.isSoftwareGl) {
       this.afterDraw(this.tick);
@@ -960,10 +1526,25 @@ export class BoardSceneController {
     dom.removeEventListener('webglcontextlost', this.onContextLost);
     dom.removeEventListener('webglcontextrestored', this.onContextRestored);
     this.controls.dispose();
+    this.postProcessing?.dispose();
+    this.postProcessing = null;
+    this.tileEntries.forEach((e) => e.disposeCustomGeometries());
+    this.tileEntries = [];
+    this.tileEntryById.clear();
+    this.hoverFlipRingGeo.dispose();
+    this.hoverFlipRingMat.dispose();
     this.ambientMotes.geometry.dispose();
     (this.ambientMotes.material as THREE.Material).dispose();
     this.burstMesh.geometry.dispose();
     (this.burstMesh.material as THREE.Material).dispose();
+    this.buildEffectRingGeo.dispose();
+    this.buildEffectBeamGeo.dispose();
+    for (const fx of this.buildEffects) {
+      (fx.ring.material as THREE.Material).dispose();
+      if (fx.outerRing) (fx.outerRing.material as THREE.Material).dispose();
+      (fx.beam.material as THREE.Material).dispose();
+    }
+    this.buildEffects = [];
     this.textures.dispose();
     this.terrainAssets.dispose();
     this.pieceMats.dispose();

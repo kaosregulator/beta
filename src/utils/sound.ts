@@ -402,6 +402,43 @@ class TabletopAudio {
     osc.stop(now + 0.27);
   }
 
+  public playTileFlip() {
+    if (this.getEffectiveSfxGain() <= 0.001) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.sfxMasterGain) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(310, now);
+    osc.frequency.exponentialRampToValueAtTime(140, now + 0.075);
+    gain.gain.setValueAtTime(0.16, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+    osc.connect(gain).connect(this.sfxMasterGain);
+    osc.start(now);
+    osc.stop(now + 0.1);
+  }
+
+  public playTileShuffle() {
+    if (this.getEffectiveSfxGain() <= 0.001) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.sfxMasterGain) return;
+    const now = ctx.currentTime;
+    for (let i = 0; i < 6; i++) {
+      const t = now + i * 0.05;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(220 + i * 32, t);
+      osc.frequency.exponentialRampToValueAtTime(110, t + 0.045);
+      gain.gain.setValueAtTime(0.095, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.055);
+      osc.connect(gain).connect(this.sfxMasterGain);
+      osc.start(t);
+      osc.stop(t + 0.06);
+    }
+  }
+
   public playVictoryFanfare() {
     if (this.getEffectiveSfxGain() <= 0.001) return;
     const ctx = this.ensureContext();
@@ -424,3 +461,4 @@ class TabletopAudio {
 }
 
 export const tabletopAudio = new TabletopAudio();
+

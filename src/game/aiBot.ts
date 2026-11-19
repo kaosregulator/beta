@@ -48,6 +48,7 @@ export function evaluateBotTradeResponse(
   state: GameState,
   botId: string,
   offer: TradeOffer,
+  isTutorialMode = false,
 ): boolean {
   const bot = state.players.find((p) => p.id === botId);
   if (!bot || !bot.isBot || state.phase !== 'main') return false;
@@ -55,6 +56,12 @@ export function evaluateBotTradeResponse(
   if (offer.toPlayerId && offer.toPlayerId !== botId) return false;
   if (offer.rejectedBy.includes(botId)) return false;
   if (!hasResources(bot.resources, offer.requesting)) return false;
+
+  if (isTutorialMode) {
+    const offeredTotal = totalResourceCount(offer.offering);
+    const requestedTotal = totalResourceCount(offer.requesting);
+    if (offeredTotal >= requestedTotal) return true;
+  }
 
   const resKeys: ResourceType[] = ['timber', 'wool', 'grain', 'brick', 'ore'];
   let gainScore = 0;
@@ -236,11 +243,11 @@ export function chooseBotAction(state: GameState, botId: string): GameAction | n
     const resKeys: ResourceType[] = ['timber', 'wool', 'grain', 'brick', 'ore'];
     for (const give of resKeys) {
       if (bot.resources[give] >= ratios[give] + 1) {
-        const scarcest = [...resKeys].sort(
-          (a, b) => bot.resources[a] - bot.resources[b],
-        )[0];
-        if (scarcest !== give) {
-          return { type: 'BANK_TRADE', playerId: botId, give, receive: scarcest };
+        const candidates = resKeys
+          .filter((r) => r !== give && state.bank[r] > 0)
+          .sort((a, b) => bot.resources[a] - bot.resources[b]);
+        if (candidates.length > 0) {
+          return { type: 'BANK_TRADE', playerId: botId, give, receive: candidates[0] };
         }
       }
     }

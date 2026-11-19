@@ -2,12 +2,17 @@ import * as THREE from 'three';
 import { FACTION_META, type FactionColor, type HarborKind } from '../game/types';
 import type { ProceduralTextureSet } from './textures';
 
+export const BLOOM_LAYER = 1;
+
 export interface PieceMaterials {
   factionMain: Record<FactionColor, THREE.MeshStandardMaterial>;
   factionRoof: Record<FactionColor, THREE.MeshStandardMaterial>;
+  factionBanner: Record<FactionColor, THREE.MeshStandardMaterial>;
   stoneFoundation: THREE.MeshStandardMaterial;
+  warmPlaster: THREE.MeshStandardMaterial;
   timberBeam: THREE.MeshStandardMaterial;
   chimneyBrick: THREE.MeshStandardMaterial;
+  flueClay: THREE.MeshStandardMaterial;
   warmWindow: THREE.MeshStandardMaterial;
   brassAccent: THREE.MeshStandardMaterial;
   robberCloak: THREE.MeshStandardMaterial;
@@ -17,6 +22,103 @@ export interface PieceMaterials {
   sharedGeos: THREE.BufferGeometry[];
   dispose: () => void;
 }
+
+export type SettlementArchetypeId =
+  | 'tudor_cottage'
+  | 'hearth_manor'
+  | 'jetty_townhouse'
+  | 'artisan_hall';
+
+export interface SettlementHouseModuleSpec {
+  id: SettlementArchetypeId;
+  label: string;
+  scale: number;
+  roofPitch: number;
+  roofOverhang: number;
+  tileRows: number;
+  tileCols: number;
+  hasCrossWing: boolean;
+  hasJettyOverhang: boolean;
+  hasDormer: boolean;
+  hasRearLeanTo: boolean;
+  chimneyPlacement: 'roof_slope' | 'exterior_hearth' | 'twin_forge';
+  hasBannerPennant: boolean;
+}
+
+export type SettlementHouseSetConfig = Record<
+  SettlementArchetypeId,
+  SettlementHouseModuleSpec
+>;
+
+export const SETTLEMENT_ARCHETYPE_ORDER: SettlementArchetypeId[] = [
+  'tudor_cottage',
+  'hearth_manor',
+  'jetty_townhouse',
+  'artisan_hall',
+];
+
+export const DEFAULT_SETTLEMENT_HOUSE_SET: SettlementHouseSetConfig = {
+  tudor_cottage: {
+    id: 'tudor_cottage',
+    label: 'Tudor Manor Cottage',
+    scale: 1.24,
+    roofPitch: 0.23,
+    roofOverhang: 0.048,
+    tileRows: 4,
+    tileCols: 6,
+    hasCrossWing: false,
+    hasJettyOverhang: false,
+    hasDormer: false,
+    hasRearLeanTo: false,
+    chimneyPlacement: 'roof_slope',
+    hasBannerPennant: false,
+  },
+  hearth_manor: {
+    id: 'hearth_manor',
+    label: 'L-Shaped Hearth Stead',
+    scale: 1.24,
+    roofPitch: 0.21,
+    roofOverhang: 0.045,
+    tileRows: 4,
+    tileCols: 5,
+    hasCrossWing: true,
+    hasJettyOverhang: false,
+    hasDormer: false,
+    hasRearLeanTo: false,
+    chimneyPlacement: 'exterior_hearth',
+    hasBannerPennant: false,
+  },
+  jetty_townhouse: {
+    id: 'jetty_townhouse',
+    label: 'Jetty Guild Townhouse',
+    scale: 1.25,
+    roofPitch: 0.24,
+    roofOverhang: 0.05,
+    tileRows: 4,
+    tileCols: 6,
+    hasCrossWing: false,
+    hasJettyOverhang: true,
+    hasDormer: true,
+    hasRearLeanTo: false,
+    chimneyPlacement: 'roof_slope',
+    hasBannerPennant: true,
+  },
+  artisan_hall: {
+    id: 'artisan_hall',
+    label: 'Timbered Artisan Hall',
+    scale: 1.24,
+    roofPitch: 0.24,
+    roofOverhang: 0.048,
+    tileRows: 4,
+    tileCols: 6,
+    hasCrossWing: false,
+    hasJettyOverhang: false,
+    hasDormer: true,
+    hasRearLeanTo: true,
+    chimneyPlacement: 'twin_forge',
+    hasBannerPennant: true,
+  },
+};
 
 function createBillowingSailGeometry(w: number, h: number): THREE.PlaneGeometry {
   const geo = new THREE.PlaneGeometry(w, h, 8, 8);
@@ -37,62 +139,82 @@ function createBillowingSailGeometry(w: number, h: number): THREE.PlaneGeometry 
 export function createPieceMaterials(textures: ProceduralTextureSet): PieceMaterials {
   const factionMain = {} as Record<FactionColor, THREE.MeshStandardMaterial>;
   const factionRoof = {} as Record<FactionColor, THREE.MeshStandardMaterial>;
+  const factionBanner = {} as Record<FactionColor, THREE.MeshStandardMaterial>;
 
   (Object.keys(FACTION_META) as FactionColor[]).forEach((color) => {
     const meta = FACTION_META[color];
     factionMain[color] = new THREE.MeshStandardMaterial({
       color: new THREE.Color(meta.hex),
-      roughness: 0.45,
-      metalness: 0.06,
+      roughness: 0.34,
+      metalness: 0.08,
       normalMap: textures.woodMahoganyNormal,
-      normalScale: new THREE.Vector2(0.35, 0.35),
+      normalScale: new THREE.Vector2(0.32, 0.32),
     });
     factionRoof[color] = new THREE.MeshStandardMaterial({
       color: new THREE.Color(meta.dark),
-      roughness: 0.58,
+      roughness: 0.46,
       metalness: 0.1,
       normalMap: textures.roofSlateNormal,
-      normalScale: new THREE.Vector2(0.85, 0.85),
+      normalScale: new THREE.Vector2(1.25, 1.25),
+    });
+    factionBanner[color] = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(meta.accent),
+      roughness: 0.42,
+      metalness: 0.06,
     });
   });
 
   const stoneFoundation = new THREE.MeshStandardMaterial({
-    color: 0x99958b,
+    color: 0xa39f95,
     map: textures.stoneMasonry,
     normalMap: textures.stoneMasonryNormal,
-    normalScale: new THREE.Vector2(0.95, 0.95),
-    roughness: 0.86,
+    normalScale: new THREE.Vector2(1.05, 1.05),
+    roughness: 0.85,
     metalness: 0.04,
   });
 
-  const timberBeam = new THREE.MeshStandardMaterial({
-    color: 0x5c3c24,
-    roughness: 0.74,
-    metalness: 0.05,
-    normalMap: textures.woodMahoganyNormal,
-    normalScale: new THREE.Vector2(0.55, 0.55),
-  });
-
-  const chimneyBrick = new THREE.MeshStandardMaterial({
-    color: 0x8f4733,
+  const warmPlaster = new THREE.MeshStandardMaterial({
+    color: 0xece0c7,
     normalMap: textures.stoneMasonryNormal,
-    normalScale: new THREE.Vector2(0.6, 0.6),
-    roughness: 0.84,
+    normalScale: new THREE.Vector2(0.24, 0.24),
+    roughness: 0.88,
     metalness: 0.02,
   });
 
+  const timberBeam = new THREE.MeshStandardMaterial({
+    color: 0x4f321c,
+    roughness: 0.72,
+    metalness: 0.04,
+    normalMap: textures.woodMahoganyNormal,
+    normalScale: new THREE.Vector2(0.58, 0.58),
+  });
+
+  const chimneyBrick = new THREE.MeshStandardMaterial({
+    color: 0xa24c35,
+    normalMap: textures.stoneMasonryNormal,
+    normalScale: new THREE.Vector2(0.85, 0.85),
+    roughness: 0.82,
+    metalness: 0.02,
+  });
+
+  const flueClay = new THREE.MeshStandardMaterial({
+    color: 0x6e3121,
+    roughness: 0.76,
+    metalness: 0.03,
+  });
+
   const warmWindow = new THREE.MeshStandardMaterial({
-    color: 0xffd984,
-    emissive: 0xd98c24,
-    emissiveIntensity: 0.72,
-    roughness: 0.22,
+    color: 0xffe6a3,
+    emissive: 0xe69524,
+    emissiveIntensity: 1.35,
+    roughness: 0.18,
     metalness: 0.12,
   });
 
   const brassAccent = new THREE.MeshStandardMaterial({
-    color: 0xd9af57,
-    roughness: 0.24,
-    metalness: 0.88,
+    color: 0xe2b75c,
+    roughness: 0.2,
+    metalness: 0.9,
   });
 
   const robberCloak = new THREE.MeshStandardMaterial({
@@ -124,31 +246,40 @@ export function createPieceMaterials(textures: ProceduralTextureSet): PieceMater
     opacity: 0.72,
   });
 
+  const sharedGeos: THREE.BufferGeometry[] = [];
+
   return {
     factionMain,
     factionRoof,
+    factionBanner,
     stoneFoundation,
+    warmPlaster,
     timberBeam,
     chimneyBrick,
+    flueClay,
     warmWindow,
     brassAccent,
     robberCloak,
     robberDangerRing,
     ghostValid,
     contactShadow,
-    sharedGeos: [],
+    sharedGeos,
     dispose: () => {
       Object.values(factionMain).forEach((m) => m.dispose());
       Object.values(factionRoof).forEach((m) => m.dispose());
+      Object.values(factionBanner).forEach((m) => m.dispose());
       stoneFoundation.dispose();
+      warmPlaster.dispose();
       timberBeam.dispose();
       chimneyBrick.dispose();
+      flueClay.dispose();
       warmWindow.dispose();
       brassAccent.dispose();
       robberCloak.dispose();
       robberDangerRing.dispose();
       ghostValid.dispose();
       contactShadow.dispose();
+      sharedGeos.forEach((g) => g.dispose());
     },
   };
 }
@@ -175,10 +306,10 @@ export function createRoadMesh(
 
   if (!isGhost) {
     const stoneBed = new THREE.Mesh(
-      new THREE.BoxGeometry(1.12, 0.032, 0.27),
+      new THREE.BoxGeometry(1.16, 0.052, 0.3),
       mats.stoneFoundation,
     );
-    stoneBed.position.y = 0.016;
+    stoneBed.position.y = 0.026;
     stoneBed.castShadow = true;
     stoneBed.receiveShadow = true;
     group.add(stoneBed);
@@ -186,50 +317,50 @@ export function createRoadMesh(
 
   // Beveled trapezoidal painted timber plank
   const profile = new THREE.Shape();
-  profile.moveTo(-0.115, 0);
-  profile.lineTo(0.115, 0);
-  profile.lineTo(0.088, 0.11);
-  profile.lineTo(0.032, 0.142);
-  profile.lineTo(-0.032, 0.142);
-  profile.lineTo(-0.088, 0.11);
+  profile.moveTo(-0.125, 0);
+  profile.lineTo(0.125, 0);
+  profile.lineTo(0.095, 0.125);
+  profile.lineTo(0.036, 0.162);
+  profile.lineTo(-0.036, 0.162);
+  profile.lineTo(-0.095, 0.125);
   profile.closePath();
 
   const plankGeo = new THREE.ExtrudeGeometry(profile, {
-    depth: 1.04,
+    depth: 1.06,
     bevelEnabled: true,
-    bevelThickness: 0.024,
-    bevelSize: 0.014,
+    bevelThickness: 0.026,
+    bevelSize: 0.015,
     bevelSegments: 2,
   });
   plankGeo.center();
   plankGeo.rotateY(Math.PI / 2);
 
   const plank = new THREE.Mesh(plankGeo, mainMat);
-  plank.position.y = 0.088;
+  plank.position.y = 0.11;
   plank.castShadow = true;
   plank.receiveShadow = true;
   group.add(plank);
 
   // Dark carved ridge beam along road center
-  const spine = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.03, 0.068), roofMat);
-  spine.position.y = 0.16;
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(0.94, 0.034, 0.074), roofMat);
+  spine.position.y = 0.19;
   spine.castShadow = true;
   group.add(spine);
 
-  // Three timber cross sleepers + brass end medallions
-  const sleeperGeo = new THREE.BoxGeometry(0.075, 0.055, 0.25);
+  // Three timber cross sleepers + brass end waystones
+  const sleeperGeo = new THREE.BoxGeometry(0.08, 0.065, 0.28);
   for (const sx of [-0.42, 0, 0.42]) {
     const sleeper = new THREE.Mesh(sleeperGeo, isGhost ? roofMat : mats.timberBeam);
-    sleeper.position.set(sx, 0.045, 0);
+    sleeper.position.set(sx, 0.06, 0);
     sleeper.castShadow = true;
     group.add(sleeper);
   }
 
   if (!isGhost) {
-    const rivetGeo = new THREE.CylinderGeometry(0.022, 0.022, 0.02, 8);
-    for (const rx of [-0.42, 0.42]) {
+    const rivetGeo = new THREE.CylinderGeometry(0.026, 0.03, 0.036, 8);
+    for (const rx of [-0.43, 0.43]) {
       const rivet = new THREE.Mesh(rivetGeo, mats.brassAccent);
-      rivet.position.set(rx, 0.172, 0);
+      rivet.position.set(rx, 0.205, 0);
       group.add(rivet);
     }
   }
@@ -237,166 +368,811 @@ export function createRoadMesh(
   return group;
 }
 
-/**
- * Miniature medieval settlement cottage (14+ distinct sculpted details):
- * Ashlar stone plinth, doorstep, painted timber walls, half-timber corner & diagonal
- * braces, overlapping shingled gable roof + ridge beam, brick chimney + flue pot,
- * arched door, warm windows with timber shutters, and contact shadow.
- */
-export function createSettlementMesh(
-  color: FactionColor | 'ghost',
+export function selectSettlementArchetype(seed?: string): SettlementArchetypeId {
+  if (!seed) return 'tudor_cottage';
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const idx = Math.abs(h) % SETTLEMENT_ARCHETYPE_ORDER.length;
+  return SETTLEMENT_ARCHETYPE_ORDER[idx];
+}
+
+export function disposePieceGroupGeometries(
+  root: THREE.Object3D,
   mats: PieceMaterials,
-): THREE.Group {
-  const group = new THREE.Group();
-  const mainMat = color === 'ghost' ? mats.ghostValid : mats.factionMain[color];
-  const roofMat = color === 'ghost' ? mats.ghostValid : mats.factionRoof[color];
-  const isGhost = color === 'ghost';
-
-  if (!isGhost) {
-    addContactShadow(group, 0.72, mats);
-  }
-
-  // 1. Stone foundation plinth + doorstep
-  const plinth = new THREE.Mesh(
-    new THREE.BoxGeometry(0.46, 0.075, 0.4),
-    isGhost ? mainMat : mats.stoneFoundation,
-  );
-  plinth.position.y = 0.038;
-  plinth.castShadow = true;
-  plinth.receiveShadow = true;
-  group.add(plinth);
-
-  // 2. Cottage body
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.39, 0.25, 0.33), mainMat);
-  body.position.y = 0.2;
-  body.castShadow = true;
-  body.receiveShadow = true;
-  group.add(body);
-
-  // 3. Corner timber posts + horizontal lintel beam
-  const beamGeo = new THREE.BoxGeometry(0.042, 0.26, 0.042);
-  for (const bx of [-0.19, 0.19]) {
-    for (const bz of [-0.16, 0.16]) {
-      const beam = new THREE.Mesh(beamGeo, isGhost ? roofMat : mats.timberBeam);
-      beam.position.set(bx, 0.2, bz);
-      group.add(beam);
+): void {
+  const shared = new Set(mats.sharedGeos);
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (mesh.isMesh && mesh.geometry && !shared.has(mesh.geometry)) {
+      mesh.geometry.dispose();
     }
-  }
+  });
+}
 
-  // 4. Shingled pitched gable roof + ridge crest beam
+/**
+ * Modular pitched 3D tiled roof with beveled gable shell, staggered courses of
+ * individual sculpted overlapping roof shingle tiles, terracotta/faction ridge caps,
+ * carved oak gable bargeboards, and player-colored gable infill.
+ */
+function addTiledGableRoof(
+  parent: THREE.Group,
+  opts: {
+    x: number;
+    y: number;
+    z: number;
+    halfSpan: number;
+    peakHeight: number;
+    depth: number;
+    rotateY?: number;
+    tileRows?: number;
+    tileCols?: number;
+    mainMat: THREE.Material;
+    roofMat: THREE.Material;
+    ridgeMat: THREE.Material;
+    timberMat: THREE.Material;
+  },
+) {
+  const roofGroup = new THREE.Group();
+  roofGroup.position.set(opts.x, opts.y, opts.z);
+  if (opts.rotateY) roofGroup.rotation.y = opts.rotateY;
+
+  const { halfSpan, peakHeight, depth } = opts;
   const roofShape = new THREE.Shape();
-  roofShape.moveTo(-0.225, 0);
-  roofShape.lineTo(0, 0.215);
-  roofShape.lineTo(0.225, 0);
-  roofShape.lineTo(0.185, -0.028);
-  roofShape.lineTo(0, 0.155);
-  roofShape.lineTo(-0.185, -0.028);
+  roofShape.moveTo(-halfSpan, 0);
+  roofShape.lineTo(0, peakHeight);
+  roofShape.lineTo(halfSpan, 0);
+  roofShape.lineTo(halfSpan * 0.85, -0.025);
+  roofShape.lineTo(0, peakHeight * 0.76);
+  roofShape.lineTo(-halfSpan * 0.85, -0.025);
   roofShape.closePath();
 
   const roofGeo = new THREE.ExtrudeGeometry(roofShape, {
-    depth: 0.46,
+    depth,
     bevelEnabled: true,
-    bevelThickness: 0.014,
+    bevelThickness: 0.013,
     bevelSize: 0.01,
     bevelSegments: 2,
   });
   roofGeo.center();
   roofGeo.rotateY(Math.PI / 2);
 
-  const roof = new THREE.Mesh(roofGeo, roofMat);
-  roof.position.y = 0.405;
-  roof.castShadow = true;
-  roof.receiveShadow = true;
-  group.add(roof);
+  const roofMesh = new THREE.Mesh(roofGeo, opts.roofMat);
+  roofMesh.position.y = peakHeight * 0.5;
+  roofMesh.castShadow = true;
+  roofMesh.receiveShadow = true;
+  roofGroup.add(roofMesh);
 
-  const ridge = new THREE.Mesh(
-    new THREE.BoxGeometry(0.49, 0.034, 0.042),
-    isGhost ? roofMat : mats.timberBeam,
-  );
-  ridge.position.y = 0.51;
-  ridge.castShadow = true;
-  group.add(ridge);
+  // Staggered courses of individual beveled 3D overlapping shingle tiles on both slopes
+  const slopeLen = Math.hypot(halfSpan, peakHeight);
+  const slopeAngle = Math.atan2(peakHeight, halfSpan);
+  const rows = Math.max(2, opts.tileRows ?? 4);
+  const cols = Math.max(3, opts.tileCols ?? 6);
+  const tileW = (depth - 0.01) / cols;
+  const tileD = (slopeLen / rows) * 1.12;
+  const singleTileGeo = new THREE.BoxGeometry(tileW * 0.9, 0.019, tileD);
 
-  // Solid gable fill prism under roof
-  const gableShape = new THREE.Shape();
-  gableShape.moveTo(-0.165, 0);
-  gableShape.lineTo(0, 0.165);
-  gableShape.lineTo(0.165, 0);
-  gableShape.closePath();
-  const gableGeo = new THREE.ExtrudeGeometry(gableShape, {
-    depth: 0.37,
-    bevelEnabled: false,
-  });
-  gableGeo.center();
-  gableGeo.rotateY(Math.PI / 2);
-  const gable = new THREE.Mesh(gableGeo, mainMat);
-  gable.position.y = 0.39;
-  group.add(gable);
-
-  // 5. Brick chimney + stone cap + terracotta flue pot
-  const chimney = new THREE.Mesh(
-    new THREE.BoxGeometry(0.085, 0.21, 0.085),
-    isGhost ? mainMat : mats.chimneyBrick,
-  );
-  chimney.position.set(0.11, 0.46, -0.085);
-  chimney.castShadow = true;
-  group.add(chimney);
-
-  const chimneyCap = new THREE.Mesh(
-    new THREE.BoxGeometry(0.105, 0.028, 0.105),
-    isGhost ? roofMat : mats.stoneFoundation,
-  );
-  chimneyCap.position.set(0.11, 0.57, -0.085);
-  group.add(chimneyCap);
-
-  if (!isGhost) {
-    // Stone doorstep
-    const step = new THREE.Mesh(
-      new THREE.BoxGeometry(0.13, 0.032, 0.06),
-      mats.stoneFoundation,
-    );
-    step.position.set(0, 0.06, 0.2);
-    group.add(step);
-
-    // Oak front door + timber frame + brass knob
-    const door = new THREE.Mesh(
-      new THREE.BoxGeometry(0.085, 0.15, 0.026),
-      mats.timberBeam,
-    );
-    door.position.set(0, 0.145, 0.17);
-    group.add(door);
-
-    const knob = new THREE.Mesh(
-      new THREE.SphereGeometry(0.012, 6, 5),
-      mats.brassAccent,
-    );
-    knob.position.set(0.025, 0.14, 0.186);
-    group.add(knob);
-
-    // Side glowing mullioned windows + wooden shutters
-    const winGeo = new THREE.BoxGeometry(0.022, 0.08, 0.08);
-    const shutterGeo = new THREE.BoxGeometry(0.018, 0.085, 0.025);
-    for (const wx of [-0.198, 0.198]) {
-      const win = new THREE.Mesh(winGeo, mats.warmWindow);
-      win.position.set(wx, 0.215, 0);
-      group.add(win);
-
-      for (const sz of [-0.056, 0.056]) {
-        const shutter = new THREE.Mesh(shutterGeo, mats.timberBeam);
-        shutter.position.set(wx, 0.215, sz);
-        group.add(shutter);
+  for (const side of [-1, 1] as const) {
+    for (let r = 0; r < rows; r++) {
+      const t = (r + 0.5) / (rows + 0.15);
+      const stagger = r % 2 === 1;
+      const colCount = stagger ? cols - 1 : cols;
+      const rowSpan = colCount * tileW;
+      for (let c = 0; c < colCount; c++) {
+        const tx = -rowSpan * 0.5 + (c + 0.5) * tileW;
+        const tile = new THREE.Mesh(singleTileGeo, opts.roofMat);
+        tile.position.set(
+          tx,
+          t * peakHeight + 0.014,
+          side * (1 - t) * halfSpan,
+        );
+        // Pitch shingle slightly shallower than roof plane so bottom edge overlaps course below
+        tile.rotation.x = side * (slopeAngle - 0.09);
+        tile.castShadow = true;
+        roofGroup.add(tile);
       }
     }
   }
 
+  // Barrel ridge cap tiles + timber ridge spine
+  const ridgeSpine = new THREE.Mesh(
+    new THREE.BoxGeometry(depth + 0.045, 0.032, 0.042),
+    opts.timberMat,
+  );
+  ridgeSpine.position.y = peakHeight + 0.012;
+  ridgeSpine.castShadow = true;
+  roofGroup.add(ridgeSpine);
+
+  const ridgeCapGeo = new THREE.CylinderGeometry(0.022, 0.024, Math.max(0.055, tileW * 0.92), 7);
+  ridgeCapGeo.rotateZ(Math.PI / 2);
+  const ridgeCapCount = Math.max(3, cols - 1);
+  for (let i = 0; i < ridgeCapCount; i++) {
+    const rx = -depth * 0.44 + (i / Math.max(1, ridgeCapCount - 1)) * (depth * 0.88);
+    const capTile = new THREE.Mesh(ridgeCapGeo, opts.ridgeMat);
+    capTile.position.set(rx, peakHeight + 0.026, 0);
+    capTile.castShadow = true;
+    roofGroup.add(capTile);
+  }
+
+  // Carved oak gable bargeboards along front and back eaves
+  const bargeGeo = new THREE.BoxGeometry(0.024, 0.028, slopeLen + 0.03);
+  for (const gx of [-depth * 0.49, depth * 0.49]) {
+    for (const side of [-1, 1] as const) {
+      const barge = new THREE.Mesh(bargeGeo, opts.timberMat);
+      barge.position.set(gx, peakHeight * 0.5 + 0.008, side * halfSpan * 0.5);
+      barge.rotation.x = side * slopeAngle;
+      roofGroup.add(barge);
+    }
+  }
+
+  // Solid player-colored gable end infill
+  const gableShape = new THREE.Shape();
+  gableShape.moveTo(-halfSpan * 0.8, 0);
+  gableShape.lineTo(0, peakHeight * 0.8);
+  gableShape.lineTo(halfSpan * 0.8, 0);
+  gableShape.closePath();
+  const gableGeo = new THREE.ExtrudeGeometry(gableShape, {
+    depth: Math.max(0.08, depth - 0.07),
+    bevelEnabled: false,
+  });
+  gableGeo.center();
+  gableGeo.rotateY(Math.PI / 2);
+  const gable = new THREE.Mesh(gableGeo, opts.mainMat);
+  gable.position.y = peakHeight * 0.4;
+  roofGroup.add(gable);
+
+  parent.add(roofGroup);
+  return roofGroup;
+}
+
+/**
+ * Modular brick & stone medieval chimney with corbelled stone hearth breast,
+ * weather-flashing collar, red-brick stack, stepped brick crown, and twin clay flue pots.
+ */
+function addModularChimney(
+  parent: THREE.Group,
+  x: number,
+  baseY: number,
+  z: number,
+  height: number,
+  mats: PieceMaterials,
+  fallbackMain: THREE.Material,
+  fallbackRoof: THREE.Material,
+  isGhost: boolean,
+  wideTwin = false,
+) {
+  const chim = new THREE.Group();
+  chim.position.set(x, baseY, z);
+
+  const stoneMat = isGhost ? fallbackMain : mats.stoneFoundation;
+  const brickMat = isGhost ? fallbackMain : mats.chimneyBrick;
+  const potMat = isGhost ? fallbackRoof : mats.flueClay;
+  const collarMat = isGhost ? fallbackRoof : mats.timberBeam;
+
+  const baseW = wideTwin ? 0.145 : 0.118;
+  const shaftW = wideTwin ? 0.112 : 0.088;
+
+  // Flared stone hearth breast
+  const hearth = new THREE.Mesh(
+    new THREE.BoxGeometry(baseW, height * 0.34, 0.12),
+    stoneMat,
+  );
+  hearth.position.y = height * 0.17;
+  hearth.castShadow = true;
+  hearth.receiveShadow = true;
+  chim.add(hearth);
+
+  // Sloped stone shoulder flashing collar
+  const flashing = new THREE.Mesh(
+    new THREE.BoxGeometry(shaftW + 0.022, 0.028, 0.108),
+    stoneMat,
+  );
+  flashing.position.y = height * 0.35;
+  flashing.castShadow = true;
+  chim.add(flashing);
+
+  // Red-brick chimney stack
+  const shaft = new THREE.Mesh(
+    new THREE.BoxGeometry(shaftW, height * 0.65, 0.088),
+    brickMat,
+  );
+  shaft.position.y = height * 0.66;
+  shaft.castShadow = true;
+  shaft.receiveShadow = true;
+  chim.add(shaft);
+
+  // Stepped brick & stone crown molding
+  const crownBrick = new THREE.Mesh(
+    new THREE.BoxGeometry(shaftW + 0.022, 0.024, 0.106),
+    brickMat,
+  );
+  crownBrick.position.y = height - 0.01;
+  crownBrick.castShadow = true;
+  chim.add(crownBrick);
+
+  const cap = new THREE.Mesh(
+    new THREE.BoxGeometry(shaftW + 0.032, 0.026, 0.116),
+    stoneMat,
+  );
+  cap.position.y = height + 0.015;
+  cap.castShadow = true;
+  chim.add(cap);
+
+  // Twin cylindrical clay chimney flue pots + rim rings
+  const potGeo = new THREE.CylinderGeometry(0.015, 0.021, 0.052, 8);
+  const rimGeo = new THREE.CylinderGeometry(0.02, 0.019, 0.012, 8);
+  const potSpread = wideTwin ? 0.032 : 0.024;
+  for (const px of [-potSpread, potSpread]) {
+    const pot = new THREE.Mesh(potGeo, potMat);
+    pot.position.set(px, height + 0.048, 0);
+    pot.castShadow = true;
+    chim.add(pot);
+
+    const rim = new THREE.Mesh(rimGeo, collarMat);
+    rim.position.set(px, height + 0.072, 0);
+    chim.add(rim);
+  }
+
+  parent.add(chim);
+}
+
+/**
+ * Modular half-timbered story: player-colored painted siding/wainscot body,
+ * slightly raised warm limewash plaster wall bays, dark oak corner posts,
+ * horizontal bressummer beams, and diagonal medieval timber braces.
+ */
+function addHalfTimberWalls(
+  parent: THREE.Group,
+  x: number,
+  yCenter: number,
+  z: number,
+  w: number,
+  h: number,
+  d: number,
+  mainMat: THREE.Material,
+  plasterMat: THREE.Material,
+  timberMat: THREE.Material,
+  isGhost: boolean,
+) {
+  // Bold player-colored structural wall body (vividly visible from overhead & isometric angles)
+  const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mainMat);
+  body.position.set(x, yCenter, z);
+  body.castShadow = true;
+  body.receiveShadow = true;
+  parent.add(body);
+
+  // Upper warm limewash plaster band framed inside player-colored wainscot below
+  if (!isGhost) {
+    const plasterH = h * 0.52;
+    const plasterY = yCenter + h * 0.14;
+    const plasterBand = new THREE.Mesh(
+      new THREE.BoxGeometry(w + 0.008, plasterH, d - 0.05),
+      plasterMat,
+    );
+    plasterBand.position.set(x, plasterY, z);
+    parent.add(plasterBand);
+
+    const plasterSideBand = new THREE.Mesh(
+      new THREE.BoxGeometry(w - 0.05, plasterH, d + 0.008),
+      plasterMat,
+    );
+    plasterSideBand.position.set(x, plasterY, z);
+    parent.add(plasterSideBand);
+  }
+
+  // Dark oak vertical corner posts & mid-studs
+  const beamGeo = new THREE.BoxGeometry(0.036, h + 0.01, 0.036);
+  for (const bx of [-w * 0.48, w * 0.48]) {
+    for (const bz of [-d * 0.48, d * 0.48]) {
+      const post = new THREE.Mesh(beamGeo, timberMat);
+      post.position.set(x + bx, yCenter, z + bz);
+      parent.add(post);
+    }
+  }
+
+  // Horizontal mid-rail & top eave tie-beam framing plaster vs player paint
+  const midRail = new THREE.Mesh(
+    new THREE.BoxGeometry(w + 0.022, 0.024, d + 0.022),
+    timberMat,
+  );
+  midRail.position.set(x, yCenter - h * 0.12, z);
+  parent.add(midRail);
+
+  const eaveBeam = new THREE.Mesh(
+    new THREE.BoxGeometry(w + 0.024, 0.028, d + 0.024),
+    timberMat,
+  );
+  eaveBeam.position.set(x, yCenter + h * 0.46, z);
+  parent.add(eaveBeam);
+
+  // Diagonal timber braces on front/back corners
+  if (!isGhost) {
+    const braceGeo = new THREE.BoxGeometry(0.02, h * 0.5, 0.018);
+    for (const bz of [-d * 0.485, d * 0.485]) {
+      for (const side of [-1, 1] as const) {
+        const brace = new THREE.Mesh(braceGeo, timberMat);
+        brace.position.set(x + side * w * 0.34, yCenter + h * 0.15, z + bz);
+        brace.rotation.z = side * 0.52;
+        parent.add(brace);
+      }
+    }
+  }
+}
+
+/**
+ * Modular oak front door, stone threshold step, timber porch hood & glowing lantern.
+ */
+function addEntryPorch(
+  parent: THREE.Group,
+  x: number,
+  baseY: number,
+  frontZ: number,
+  mats: PieceMaterials,
+) {
+  const step = new THREE.Mesh(
+    new THREE.BoxGeometry(0.145, 0.034, 0.072),
+    mats.stoneFoundation,
+  );
+  step.position.set(x, baseY + 0.017, frontZ + 0.028);
+  parent.add(step);
+
+  const frame = new THREE.Mesh(
+    new THREE.BoxGeometry(0.104, 0.155, 0.02),
+    mats.timberBeam,
+  );
+  frame.position.set(x, baseY + 0.095, frontZ + 0.004);
+  parent.add(frame);
+
+  const door = new THREE.Mesh(
+    new THREE.BoxGeometry(0.08, 0.14, 0.026),
+    mats.flueClay,
+  );
+  door.position.set(x, baseY + 0.092, frontZ + 0.008);
+  parent.add(door);
+
+  const hood = new THREE.Mesh(
+    new THREE.BoxGeometry(0.148, 0.024, 0.072),
+    mats.timberBeam,
+  );
+  hood.position.set(x, baseY + 0.188, frontZ + 0.026);
+  hood.rotation.x = 0.22;
+  parent.add(hood);
+
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.011, 6, 5), mats.brassAccent);
+  knob.position.set(x + 0.024, baseY + 0.088, frontZ + 0.024);
+  parent.add(knob);
+
+  const lantern = new THREE.Mesh(
+    new THREE.BoxGeometry(0.034, 0.048, 0.034),
+    mats.warmWindow,
+  );
+  lantern.position.set(x + 0.082, baseY + 0.158, frontZ + 0.02);
+  lantern.layers.enable(BLOOM_LAYER);
+  parent.add(lantern);
+}
+
+/**
+ * Shuttered glowing leaded-glass window module with player-colored painted shutters.
+ */
+function addShutteredWindow(
+  parent: THREE.Group,
+  x: number,
+  y: number,
+  z: number,
+  facing: 'front' | 'left' | 'right',
+  mats: PieceMaterials,
+  bannerMat: THREE.Material,
+) {
+  const wg = new THREE.Group();
+  wg.position.set(x, y, z);
+  if (facing === 'left') wg.rotation.y = -Math.PI / 2;
+  else if (facing === 'right') wg.rotation.y = Math.PI / 2;
+
+  const sill = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.018, 0.03), mats.timberBeam);
+  sill.position.set(0, -0.048, 0.008);
+  wg.add(sill);
+
+  const pane = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.082, 0.022), mats.warmWindow);
+  pane.layers.enable(BLOOM_LAYER);
+  wg.add(pane);
+
+  const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.084, 0.026), mats.timberBeam);
+  wg.add(mullion);
+
+  const shutterGeo = new THREE.BoxGeometry(0.024, 0.086, 0.018);
+  for (const sx of [-0.056, 0.056]) {
+    const shutter = new THREE.Mesh(shutterGeo, bannerMat);
+    shutter.position.set(sx, 0, 0.003);
+    wg.add(shutter);
+  }
+
+  parent.add(wg);
+}
+
+/**
+ * Modular 3D medieval settlement house set driven by `SettlementHouseSetConfig`:
+ *  - `tudor_cottage`: Tudor Manor Cottage (timber framing, limewash plaster, tiled gable roof, chimney, porch)
+ *  - `hearth_manor`: L-Shaped Hearth Stead (projecting cross-wing + tall exterior stone-breast chimney)
+ *  - `jetty_townhouse`: Jetty Guild Townhouse (stone undercroft, cantilevered upper story, dormer & banner)
+ *  - `artisan_hall`: Timbered Artisan Hall (twin-flue forge chimney, dormer + rear bakehouse lean-to)
+ */
+export function createSettlementMesh(
+  color: FactionColor | 'ghost',
+  mats: PieceMaterials,
+  variantSeed?: string,
+  houseSet: SettlementHouseSetConfig = DEFAULT_SETTLEMENT_HOUSE_SET,
+): THREE.Group {
+  const group = new THREE.Group();
+  const isGhost = color === 'ghost';
+  const mainMat = isGhost ? mats.ghostValid : mats.factionMain[color];
+  const roofMat = isGhost ? mats.ghostValid : mats.factionRoof[color];
+  const bannerMat = isGhost ? mats.ghostValid : mats.factionBanner[color];
+  const ridgeMat = isGhost ? roofMat : mats.flueClay;
+  const timberMat = isGhost ? roofMat : mats.timberBeam;
+  const stoneMat = isGhost ? mainMat : mats.stoneFoundation;
+  const plasterMat = isGhost ? mainMat : mats.warmPlaster;
+
+  const archetypeId = selectSettlementArchetype(variantSeed);
+  const spec = houseSet[archetypeId] ?? DEFAULT_SETTLEMENT_HOUSE_SET.tudor_cottage;
+
+  if (!isGhost) {
+    addContactShadow(group, 1.06, mats);
+  }
+
+  // Shared octagonal carved stone vertex dais + bold player-colored faction curb collar
+  const dais = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.37, 0.42, 0.095, 8),
+    stoneMat,
+  );
+  dais.position.y = 0.048;
+  dais.castShadow = true;
+  dais.receiveShadow = true;
+  group.add(dais);
+
+  if (!isGhost) {
+    const curb = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.382, 0.388, 0.026, 8),
+      mainMat,
+    );
+    curb.position.y = 0.096;
+    group.add(curb);
+  }
+
+  const house = new THREE.Group();
+  house.position.y = 0.104;
+  house.scale.setScalar(spec.scale);
+
+  if (spec.hasCrossWing) {
+    // --- L-Shaped Hearth Stead with projecting cross-wing & exterior hearth chimney ---
+    const mainPlinth = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.07, 0.35), stoneMat);
+    mainPlinth.position.set(-0.02, 0.035, -0.02);
+    mainPlinth.castShadow = true;
+    mainPlinth.receiveShadow = true;
+    house.add(mainPlinth);
+
+    const wingPlinth = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.07, 0.25), stoneMat);
+    wingPlinth.position.set(0.11, 0.035, 0.11);
+    wingPlinth.castShadow = true;
+    house.add(wingPlinth);
+
+    addHalfTimberWalls(
+      house,
+      -0.02,
+      0.185,
+      -0.02,
+      0.39,
+      0.23,
+      0.3,
+      mainMat,
+      plasterMat,
+      timberMat,
+      isGhost,
+    );
+
+    addTiledGableRoof(house, {
+      x: -0.02,
+      y: 0.3,
+      z: -0.02,
+      halfSpan: 0.15 + spec.roofOverhang,
+      peakHeight: spec.roofPitch,
+      depth: 0.44,
+      tileRows: spec.tileRows,
+      tileCols: spec.tileCols,
+      mainMat,
+      roofMat,
+      ridgeMat,
+      timberMat,
+    });
+
+    addHalfTimberWalls(
+      house,
+      0.11,
+      0.17,
+      0.11,
+      0.21,
+      0.2,
+      0.23,
+      mainMat,
+      plasterMat,
+      timberMat,
+      isGhost,
+    );
+
+    addTiledGableRoof(house, {
+      x: 0.11,
+      y: 0.27,
+      z: 0.11,
+      halfSpan: 0.145,
+      peakHeight: spec.roofPitch * 0.72,
+      depth: 0.26,
+      rotateY: Math.PI / 2,
+      tileRows: Math.max(2, spec.tileRows - 1),
+      tileCols: Math.max(3, spec.tileCols - 2),
+      mainMat,
+      roofMat,
+      ridgeMat,
+      timberMat,
+    });
+
+    addModularChimney(house, -0.225, 0.06, -0.02, 0.56, mats, mainMat, roofMat, isGhost);
+
+    if (!isGhost) {
+      addEntryPorch(house, -0.1, 0.05, 0.13, mats);
+      addShutteredWindow(house, 0.11, 0.18, 0.228, 'front', mats, bannerMat);
+      addShutteredWindow(house, 0.218, 0.18, 0.11, 'right', mats, bannerMat);
+
+      const barrel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.036, 0.036, 0.082, 10),
+        mats.chimneyBrick,
+      );
+      barrel.position.set(-0.22, 0.085, 0.14);
+      barrel.castShadow = true;
+      house.add(barrel);
+    }
+  } else if (spec.hasJettyOverhang) {
+    // --- Jetty Guild Townhouse: stone undercroft, cantilevered upper floor, dormer & guild banner ---
+    const undercroft = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.145, 0.32), stoneMat);
+    undercroft.position.y = 0.072;
+    undercroft.castShadow = true;
+    undercroft.receiveShadow = true;
+    house.add(undercroft);
+
+    addHalfTimberWalls(
+      house,
+      0,
+      0.23,
+      0,
+      0.42,
+      0.17,
+      0.36,
+      mainMat,
+      plasterMat,
+      timberMat,
+      isGhost,
+    );
+
+    const corbelGeo = new THREE.BoxGeometry(0.032, 0.036, 0.045);
+    for (const cx of [-0.14, 0, 0.14]) {
+      const corbel = new THREE.Mesh(corbelGeo, timberMat);
+      corbel.position.set(cx, 0.138, 0.165);
+      house.add(corbel);
+    }
+
+    addTiledGableRoof(house, {
+      x: 0,
+      y: 0.315,
+      z: 0,
+      halfSpan: 0.18 + spec.roofOverhang,
+      peakHeight: spec.roofPitch,
+      depth: 0.46,
+      tileRows: spec.tileRows,
+      tileCols: spec.tileCols,
+      mainMat,
+      roofMat,
+      ridgeMat,
+      timberMat,
+    });
+
+    if (spec.hasDormer) {
+      const dormerBody = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.09, 0.12), mainMat);
+      dormerBody.position.set(-0.07, 0.405, 0.13);
+      dormerBody.castShadow = true;
+      house.add(dormerBody);
+      addTiledGableRoof(house, {
+        x: -0.07,
+        y: 0.45,
+        z: 0.13,
+        halfSpan: 0.075,
+        peakHeight: 0.072,
+        depth: 0.14,
+        rotateY: Math.PI / 2,
+        tileRows: 2,
+        tileCols: 2,
+        mainMat,
+        roofMat,
+        ridgeMat,
+        timberMat,
+      });
+    }
+
+    addModularChimney(house, 0.11, 0.29, -0.07, 0.35, mats, mainMat, roofMat, isGhost);
+
+    if (!isGhost) {
+      addEntryPorch(house, 0.02, 0.02, 0.16, mats);
+
+      const dormerPane = new THREE.Mesh(
+        new THREE.BoxGeometry(0.056, 0.056, 0.022),
+        mats.warmWindow,
+      );
+      dormerPane.position.set(-0.07, 0.41, 0.192);
+      dormerPane.layers.enable(BLOOM_LAYER);
+      house.add(dormerPane);
+
+      addShutteredWindow(house, -0.1, 0.23, 0.182, 'front', mats, bannerMat);
+      addShutteredWindow(house, -0.212, 0.23, 0, 'left', mats, bannerMat);
+      addShutteredWindow(house, 0.212, 0.23, 0, 'right', mats, bannerMat);
+
+      if (spec.hasBannerPennant) {
+        const pennant = new THREE.Mesh(
+          new THREE.BoxGeometry(0.055, 0.098, 0.016),
+          bannerMat,
+        );
+        pennant.position.set(-0.105, 0.105, 0.172);
+        house.add(pennant);
+      }
+    }
+  } else if (spec.hasRearLeanTo) {
+    // --- Timbered Artisan Hall: main timbered hall, rear workshop lean-to, twin-flue forge chimney ---
+    const plinth = new THREE.Mesh(new THREE.BoxGeometry(0.47, 0.072, 0.42), stoneMat);
+    plinth.position.y = 0.036;
+    plinth.castShadow = true;
+    plinth.receiveShadow = true;
+    house.add(plinth);
+
+    addHalfTimberWalls(
+      house,
+      0,
+      0.19,
+      0.03,
+      0.41,
+      0.24,
+      0.3,
+      mainMat,
+      plasterMat,
+      timberMat,
+      isGhost,
+    );
+
+    addTiledGableRoof(house, {
+      x: 0,
+      y: 0.31,
+      z: 0.03,
+      halfSpan: 0.15 + spec.roofOverhang,
+      peakHeight: spec.roofPitch,
+      depth: 0.46,
+      tileRows: spec.tileRows,
+      tileCols: spec.tileCols,
+      mainMat,
+      roofMat,
+      ridgeMat,
+      timberMat,
+    });
+
+    // Rear artisan workshop / bakehouse lean-to annex
+    const leanBody = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.15, 0.12), mainMat);
+    leanBody.position.set(-0.03, 0.145, -0.16);
+    leanBody.castShadow = true;
+    house.add(leanBody);
+
+    const leanRoof = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.028, 0.16), roofMat);
+    leanRoof.position.set(-0.03, 0.23, -0.165);
+    leanRoof.rotation.x = -0.34;
+    leanRoof.castShadow = true;
+    house.add(leanRoof);
+
+    // Wide twin-flue forge chimney
+    addModularChimney(
+      house,
+      0.13,
+      0.07,
+      -0.14,
+      0.55,
+      mats,
+      mainMat,
+      roofMat,
+      isGhost,
+      true,
+    );
+
+    if (!isGhost) {
+      addEntryPorch(house, 0.04, 0.05, 0.18, mats);
+      addShutteredWindow(house, -0.11, 0.2, 0.182, 'front', mats, bannerMat);
+      addShutteredWindow(house, -0.208, 0.2, 0.03, 'left', mats, bannerMat);
+      addShutteredWindow(house, 0.208, 0.2, 0.03, 'right', mats, bannerMat);
+
+      if (spec.hasBannerPennant) {
+        const pole = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.01, 0.012, 0.16, 6),
+          timberMat,
+        );
+        pole.position.set(-0.18, 0.52, 0.03);
+        house.add(pole);
+        const flag = new THREE.Mesh(
+          new THREE.BoxGeometry(0.08, 0.045, 0.012),
+          bannerMat,
+        );
+        flag.position.set(-0.14, 0.56, 0.03);
+        house.add(flag);
+      }
+    }
+  } else {
+    // --- Tudor Manor Cottage: classic steep tiled gable, limewash half-timbering, chimney & porch ---
+    const plinth = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.072, 0.39), stoneMat);
+    plinth.position.y = 0.036;
+    plinth.castShadow = true;
+    plinth.receiveShadow = true;
+    house.add(plinth);
+
+    addHalfTimberWalls(
+      house,
+      0,
+      0.19,
+      0,
+      0.41,
+      0.24,
+      0.34,
+      mainMat,
+      plasterMat,
+      timberMat,
+      isGhost,
+    );
+
+    addTiledGableRoof(house, {
+      x: 0,
+      y: 0.31,
+      z: 0,
+      halfSpan: 0.175 + spec.roofOverhang,
+      peakHeight: spec.roofPitch,
+      depth: 0.47,
+      tileRows: spec.tileRows,
+      tileCols: spec.tileCols,
+      mainMat,
+      roofMat,
+      ridgeMat,
+      timberMat,
+    });
+
+    addModularChimney(house, 0.125, 0.27, -0.09, 0.35, mats, mainMat, roofMat, isGhost);
+
+    if (!isGhost) {
+      addEntryPorch(house, 0, 0.05, 0.17, mats);
+
+      const crest = new THREE.Mesh(new THREE.SphereGeometry(0.024, 8, 6), mats.brassAccent);
+      crest.position.set(0, 0.31 + spec.roofPitch + 0.032, 0);
+      house.add(crest);
+
+      const crate = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.075, 0.075), mats.timberBeam);
+      crate.position.set(-0.23, 0.075, 0.13);
+      crate.rotation.y = 0.22;
+      crate.castShadow = true;
+      house.add(crate);
+
+      addShutteredWindow(house, -0.208, 0.2, 0, 'left', mats, bannerMat);
+      addShutteredWindow(house, 0.208, 0.2, 0, 'right', mats, bannerMat);
+    }
+  }
+
+  group.add(house);
   return group;
 }
 
 /**
- * Unmistakable multi-building Fortified City Citadel:
- * Stepped stone terrace courtyard + curtain parapet, arched gatehouse,
- * Great Hall with dormer & chimney, tall octagonal Watchtower Keep with
- * crenellated battlements, slate spire, brass finial, and wind-fluttered banner.
+ * Unmistakable multi-building Fortified City Citadel resting on a monumental
+ * stepped octagonal stone & brass bastion with 4 corner curtain turrets,
+ * Great Hall, arched gatehouse with glowing braziers, towering Watchtower Keep,
+ * gilded crown collar, tall slate spire, and waving war-banner.
  */
 export function createCityMesh(
   color: FactionColor | 'ghost',
@@ -409,37 +1185,78 @@ export function createCityMesh(
   const stone = isGhost ? mainMat : mats.stoneFoundation;
 
   if (!isGhost) {
-    addContactShadow(group, 0.98, mats);
+    addContactShadow(group, 1.32, mats);
   }
 
+  // 0. Monumental stepped octagonal bastion terrace plinth + brass & faction rim
+  const bastion = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.49, 0.54, 0.12, 8),
+    stone,
+  );
+  bastion.position.y = 0.06;
+  bastion.castShadow = true;
+  bastion.receiveShadow = true;
+  group.add(bastion);
+
+  if (!isGhost) {
+    const brassTrim = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.495, 0.5, 0.026, 8),
+      mats.brassAccent,
+    );
+    brassTrim.position.y = 0.125;
+    group.add(brassTrim);
+  }
+
+  const citadel = new THREE.Group();
+  citadel.position.y = 0.132;
+  citadel.scale.setScalar(1.28);
+
   // 1. Stepped stone courtyard terrace
-  const base = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.095, 0.56), stone);
-  base.position.y = 0.048;
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.1, 0.58), stone);
+  base.position.y = 0.05;
   base.castShadow = true;
   base.receiveShadow = true;
-  group.add(base);
+  citadel.add(base);
 
-  // Perimeter low curtain parapet wall on front edge
-  const parapet = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.075, 0.045), stone);
-  parapet.position.set(0, 0.125, 0.255);
+  // Perimeter curtain parapet wall + 4 corner bastion turrets
+  const parapet = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.08, 0.048), stone);
+  parapet.position.set(0, 0.13, 0.265);
   parapet.castShadow = true;
-  group.add(parapet);
+  citadel.add(parapet);
 
-  // 2. Great Hall body + timber belt course
-  const hall = new THREE.Mesh(new THREE.BoxGeometry(0.39, 0.31, 0.4), mainMat);
-  hall.position.set(-0.09, 0.25, 0.01);
+  const cornerTurretGeo = new THREE.CylinderGeometry(0.065, 0.075, 0.28, 8);
+  const cornerCapGeo = new THREE.ConeGeometry(0.078, 0.1, 8);
+  for (const [tx, tz] of [
+    [-0.31, 0.24],
+    [0.31, 0.24],
+    [-0.31, -0.24],
+  ] as const) {
+    const tBody = new THREE.Mesh(cornerTurretGeo, stone);
+    tBody.position.set(tx, 0.18, tz);
+    tBody.castShadow = true;
+    citadel.add(tBody);
+
+    const tCap = new THREE.Mesh(cornerCapGeo, roofMat);
+    tCap.position.set(tx, 0.365, tz);
+    tCap.castShadow = true;
+    citadel.add(tCap);
+  }
+
+  // 2. Grand Great Hall body
+  const hall = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.34, 0.42), mainMat);
+  hall.position.set(-0.09, 0.27, 0.01);
   hall.castShadow = true;
   hall.receiveShadow = true;
-  group.add(hall);
+  citadel.add(hall);
 
-  // 3. Great Hall steep slate gabled roof
+  // 3. Great Hall steep slate gabled roof + brass ridge crest
   const hallRoofShape = new THREE.Shape();
-  hallRoofShape.moveTo(-0.23, 0);
-  hallRoofShape.lineTo(0, 0.23);
-  hallRoofShape.lineTo(0.23, 0);
+  hallRoofShape.moveTo(-0.24, 0);
+  hallRoofShape.lineTo(0, 0.245);
+  hallRoofShape.lineTo(0.24, 0);
   hallRoofShape.closePath();
   const hallRoofGeo = new THREE.ExtrudeGeometry(hallRoofShape, {
-    depth: 0.43,
+    depth: 0.45,
     bevelEnabled: true,
     bevelThickness: 0.015,
     bevelSize: 0.012,
@@ -448,105 +1265,135 @@ export function createCityMesh(
   hallRoofGeo.center();
   hallRoofGeo.rotateY(Math.PI / 2);
   const hallRoof = new THREE.Mesh(hallRoofGeo, roofMat);
-  hallRoof.position.set(-0.09, 0.5, 0.01);
+  hallRoof.position.set(-0.09, 0.54, 0.01);
   hallRoof.castShadow = true;
-  group.add(hallRoof);
+  citadel.add(hallRoof);
 
-  // 4. Tall Octagonal Stone Watchtower Keep
-  const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.145, 0.16, 0.64, 8), stone);
-  tower.position.set(0.19, 0.415, -0.06);
+  // 4. Soaring Octagonal Stone Master Keep Tower
+  const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.155, 0.175, 0.74, 8), stone);
+  tower.position.set(0.19, 0.465, -0.06);
   tower.castShadow = true;
   tower.receiveShadow = true;
-  group.add(tower);
+  citadel.add(tower);
 
-  // 5. Corbelled octagonal battlement collar + 8 merlons
-  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.185, 0.15, 0.075, 8), stone);
-  collar.position.set(0.19, 0.74, -0.06);
+  // 5. Corbelled octagonal battlement collar + brass crown band + 8 merlons
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.16, 0.082, 8), stone);
+  collar.position.set(0.19, 0.84, -0.06);
   collar.castShadow = true;
-  group.add(collar);
+  citadel.add(collar);
 
-  const merlonGeo = new THREE.BoxGeometry(0.055, 0.065, 0.055);
+  if (!isGhost) {
+    const keepBand = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.178, 0.178, 0.032, 8),
+      mats.brassAccent,
+    );
+    keepBand.position.set(0.19, 0.79, -0.06);
+    citadel.add(keepBand);
+  }
+
+  const merlonGeo = new THREE.BoxGeometry(0.058, 0.072, 0.058);
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2;
     const merlon = new THREE.Mesh(merlonGeo, stone);
     merlon.position.set(
-      0.19 + Math.cos(a) * 0.148,
-      0.8,
-      -0.06 + Math.sin(a) * 0.148,
+      0.19 + Math.cos(a) * 0.16,
+      0.905,
+      -0.06 + Math.sin(a) * 0.16,
     );
     merlon.rotation.y = -a;
-    group.add(merlon);
+    citadel.add(merlon);
   }
 
-  // 6. Octagonal slate spire + brass finial orb
-  const spire = new THREE.Mesh(new THREE.ConeGeometry(0.165, 0.29, 8), roofMat);
-  spire.position.set(0.19, 0.91, -0.06);
+  // 6. Octagonal slate spire + gilded orb
+  const spire = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.34, 8), roofMat);
+  spire.position.set(0.19, 1.03, -0.06);
   spire.castShadow = true;
-  group.add(spire);
+  citadel.add(spire);
 
-  // 7. Brass flagpole + billowing faction pennant banner
+  // 7. Brass flagpole + orb + billowing faction war-banner
   const pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.012, 0.014, 0.24, 8),
+    new THREE.CylinderGeometry(0.014, 0.016, 0.3, 8),
     isGhost ? roofMat : mats.brassAccent,
   );
-  pole.position.set(0.19, 1.13, -0.06);
-  group.add(pole);
+  pole.position.set(0.19, 1.28, -0.06);
+  citadel.add(pole);
+
+  if (!isGhost) {
+    const orb = new THREE.Mesh(new THREE.SphereGeometry(0.028, 8, 6), mats.brassAccent);
+    orb.position.set(0.19, 1.43, -0.06);
+    citadel.add(orb);
+  }
 
   const bannerPivot = new THREE.Group();
-  bannerPivot.position.set(0.19, 1.19, -0.06);
-  const banner = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.085, 0.016), mainMat);
-  banner.position.set(0.095, 0, 0);
+  bannerPivot.position.set(0.19, 1.34, -0.06);
+  const banner = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.115, 0.018), mainMat);
+  banner.position.set(0.14, 0, 0);
   bannerPivot.add(banner);
-  group.add(bannerPivot);
+  citadel.add(bannerPivot);
   group.userData.bannerPivot = bannerPivot;
 
   // 8. Corner annex bastion wing
-  const wing = new THREE.Mesh(new THREE.BoxGeometry(0.23, 0.21, 0.23), mainMat);
-  wing.position.set(0.17, 0.2, 0.15);
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.24, 0.25), mainMat);
+  wing.position.set(0.17, 0.215, 0.15);
   wing.castShadow = true;
-  group.add(wing);
+  citadel.add(wing);
 
-  const wingRoof = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.16, 4), roofMat);
+  const wingRoof = new THREE.Mesh(new THREE.ConeGeometry(0.195, 0.18, 4), roofMat);
   wingRoof.rotation.y = Math.PI / 4;
-  wingRoof.position.set(0.17, 0.38, 0.15);
+  wingRoof.position.set(0.17, 0.415, 0.15);
   wingRoof.castShadow = true;
-  group.add(wingRoof);
+  citadel.add(wingRoof);
 
   if (!isGhost) {
-    // 9. Arched portcullis gatehouse + warm hearth windows
-    const gateFrame = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.18, 0.045), stone);
-    gateFrame.position.set(-0.09, 0.17, 0.22);
-    group.add(gateFrame);
+    // 9. Arched portcullis gatehouse + flanking glowing ember braziers + warm hearth windows
+    const gateFrame = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.19, 0.05), stone);
+    gateFrame.position.set(-0.09, 0.18, 0.225);
+    citadel.add(gateFrame);
 
     const gateDoor = new THREE.Mesh(
-      new THREE.BoxGeometry(0.095, 0.145, 0.025),
+      new THREE.BoxGeometry(0.098, 0.15, 0.026),
       mats.timberBeam,
     );
-    gateDoor.position.set(-0.09, 0.155, 0.238);
-    group.add(gateDoor);
+    gateDoor.position.set(-0.09, 0.16, 0.244);
+    citadel.add(gateDoor);
 
-    const winGeo = new THREE.BoxGeometry(0.045, 0.085, 0.026);
+    const bowlGeo = new THREE.CylinderGeometry(0.032, 0.02, 0.045, 8);
+    const emberGeo = new THREE.SphereGeometry(0.025, 6, 5);
+    for (const bx of [-0.195, 0.015]) {
+      const bowl = new THREE.Mesh(bowlGeo, mats.brassAccent);
+      bowl.position.set(bx, 0.168, 0.275);
+      citadel.add(bowl);
+
+      const ember = new THREE.Mesh(emberGeo, mats.warmWindow);
+      ember.position.set(bx, 0.198, 0.275);
+      ember.layers.enable(BLOOM_LAYER);
+      citadel.add(ember);
+    }
+
+    const winGeo = new THREE.BoxGeometry(0.05, 0.095, 0.03);
     for (const [wx, wy, wz] of [
-      [-0.18, 0.29, 0.215],
-      [0.0, 0.29, 0.215],
-      [0.19, 0.56, 0.09],
-      [0.19, 0.42, 0.09],
-      [0.17, 0.22, 0.268],
+      [-0.18, 0.31, 0.222],
+      [0.0, 0.31, 0.222],
+      [0.19, 0.62, 0.1],
+      [0.19, 0.47, 0.1],
+      [0.17, 0.235, 0.278],
     ] as const) {
       const win = new THREE.Mesh(winGeo, mats.warmWindow);
       win.position.set(wx, wy, wz);
-      group.add(win);
+      win.layers.enable(BLOOM_LAYER);
+      citadel.add(win);
     }
 
     // Brick chimney on Great Hall
     const chimney = new THREE.Mesh(
-      new THREE.BoxGeometry(0.075, 0.22, 0.075),
+      new THREE.BoxGeometry(0.08, 0.24, 0.08),
       mats.chimneyBrick,
     );
-    chimney.position.set(-0.2, 0.58, -0.09);
-    group.add(chimney);
+    chimney.position.set(-0.2, 0.625, -0.09);
+    citadel.add(chimney);
   }
 
+  group.add(citadel);
   return group;
 }
 
@@ -614,6 +1461,7 @@ export function createRobberMesh(mats: PieceMaterials): THREE.Group {
     mats.warmWindow,
   );
   lantern.position.set(0.18, 0.38, 0.11);
+  lantern.layers.enable(BLOOM_LAYER);
   group.add(lantern);
 
   return group;

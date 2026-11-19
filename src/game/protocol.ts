@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { TutorialMissionId } from './tutorialEngine';
 import {
   GameActionSchema,
   type BoardPreset,
@@ -9,7 +10,7 @@ import {
 } from './types';
 
 export const FactionColorSchema = z.enum(['crimson', 'navy', 'forest', 'ivory']);
-export const BoardPresetSchema = z.enum(['standard', 'random_balanced']);
+export const BoardPresetSchema = z.enum(['beginner_setup', 'standard', 'random_balanced']);
 
 export interface LobbyPlayerSlot {
   id: string;
@@ -21,8 +22,10 @@ export interface LobbyPlayerSlot {
 
 export interface RoomSnapshot {
   roomId: string;
-  mode: 'tv_host' | 'quick_play';
+  mode: 'tv_host' | 'quick_play' | 'tutorial';
+  tutorialMission?: TutorialMissionId;
   preset: BoardPreset;
+  blindStart: boolean;
   victoryTarget: number;
   status: 'lobby' | 'playing' | 'finished';
   lobbyPlayers: LobbyPlayerSlot[];
@@ -37,10 +40,11 @@ export interface RoomSnapshot {
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('CREATE_ROOM'),
-    mode: z.enum(['tv_host', 'quick_play']),
+    mode: z.enum(['tv_host', 'quick_play', 'tutorial']),
     hostName: z.string().trim().min(1).max(20).optional(),
     hostColor: FactionColorSchema.optional(),
     preset: BoardPresetSchema.optional(),
+    blindStart: z.boolean().optional(),
     victoryTarget: z.number().int().min(6).max(15).optional(),
     botCount: z.number().int().min(0).max(3).optional(),
   }),
@@ -64,6 +68,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('UPDATE_ROOM_SETTINGS'),
     roomId: z.string(),
     preset: BoardPresetSchema.optional(),
+    blindStart: z.boolean().optional(),
     victoryTarget: z.number().int().min(6).max(15).optional(),
   }),
   z.object({

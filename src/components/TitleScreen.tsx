@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  BookOpen,
+  Compass,
   Monitor,
   Play,
   Settings,
@@ -8,13 +8,17 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import { FACTION_META, type FactionColor } from '../game/types';
+import { FACTION_META, type BoardPreset, type FactionColor } from '../game/types';
 import { useGameStore } from '../store/useGameStore';
 import { IsleholdCrest } from './ResourceArt';
 import { SettingsModal } from './SettingsModal';
-import { TutorialModal } from './TutorialModal';
 
 const COLORS: FactionColor[] = ['crimson', 'navy', 'forest', 'ivory'];
+const PRESETS: Array<{ value: BoardPreset; label: string; hint: string }> = [
+  { value: 'random_balanced', label: 'Balanced', hint: 'Shuffle & flip' },
+  { value: 'standard', label: 'Classic', hint: 'Standard map' },
+  { value: 'beginner_setup', label: 'Beginner', hint: 'Pre-placed' },
+];
 
 export function TitleScreen() {
   const createRoom = useGameStore((s) => s.createRoom);
@@ -25,9 +29,12 @@ export function TitleScreen() {
   const clearError = useGameStore((s) => s.clearError);
 
   const [hostColor, setHostColor] = useState<FactionColor>('crimson');
-  const [showTutorial, setShowTutorial] = useState(false);
+  const [preset, setPreset] = useState<BoardPreset>('random_balanced');
+  const [blindStart, setBlindStart] = useState<boolean>(true);
   const [showSettings, setShowSettings] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const effectiveBlindStart = preset !== 'beginner_setup' && blindStart;
 
   const handleQuickPlay = async () => {
     if (busy) return;
@@ -37,7 +44,8 @@ export function TitleScreen() {
         mode: 'quick_play',
         hostName: 'Commander',
         hostColor,
-        preset: 'random_balanced',
+        preset,
+        blindStart: effectiveBlindStart,
         victoryTarget: 10,
         botCount: 3,
       });
@@ -52,8 +60,26 @@ export function TitleScreen() {
     try {
       await createRoom({
         mode: 'tv_host',
-        preset: 'random_balanced',
+        preset,
+        blindStart: effectiveBlindStart,
         victoryTarget: 10,
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleStartTutorial = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await createRoom({
+        mode: 'tutorial',
+        hostName: 'Commander',
+        hostColor,
+        preset: 'standard',
+        blindStart: true,
+        victoryTarget: 8,
       });
     } finally {
       setBusy(false);
@@ -63,7 +89,7 @@ export function TitleScreen() {
   // Support Enter / Space start handshake on Title screen
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (showTutorial || showSettings) return;
+      if (showSettings) return;
       if (e.key === 'Enter' || e.key === ' ') {
         const tag = (e.target as HTMLElement | null)?.tagName;
         if (tag === 'INPUT' || tag === 'BUTTON' || tag === 'SELECT') return;
@@ -129,7 +155,7 @@ export function TitleScreen() {
         </p>
 
         {/* Quick Play Faction Banner Picker */}
-        <div className="mb-5">
+        <div className="mb-4">
           <div className="text-[11px] uppercase tracking-wider text-[#cbb894] mb-2">
             Your Faction Banner
           </div>
@@ -158,6 +184,54 @@ export function TitleScreen() {
               );
             })}
           </div>
+        </div>
+
+        {/* Beginning Set-Up / Island Preset Selector */}
+        <div className="mb-5">
+          <div className="text-[11px] uppercase tracking-wider text-[#cbb894] mb-2">
+            Beginning Set-Up
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {PRESETS.map((opt) => {
+              const active = preset === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  data-preset={opt.value}
+                  onClick={() => setPreset(opt.value)}
+                  className={`rounded-lg px-2.5 py-2 border text-left transition-colors cursor-pointer ${
+                    active
+                      ? 'bg-[#1f2e3d] border-[#f5d88c] text-[#f7eed7]'
+                      : 'bg-[#15202b] border-white/10 text-[#9fb0c2] hover:border-white/25'
+                  }`}
+                >
+                  <div className="text-[11px] font-semibold leading-tight">{opt.label}</div>
+                  <div className="text-[10px] text-[#9fb0c2] leading-tight mt-0.5">
+                    {opt.hint}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          {preset !== 'beginner_setup' && (
+            <label className="mt-2.5 flex items-center justify-between gap-2 rounded-lg bg-[#15202b] border border-white/10 px-3 py-2 cursor-pointer">
+              <div>
+                <div className="text-[11px] font-medium text-[#f5efe2]">
+                  Start Tiles Face-Down (Classic Shuffle)
+                </div>
+                <div className="text-[10px] text-[#9fb0c2]">
+                  Plain tiles with numbers only — shuffle &amp; flip to begin
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={blindStart}
+                onChange={(e) => setBlindStart(e.target.checked)}
+                className="w-4 h-4 accent-[#d4aa54] cursor-pointer"
+              />
+            </label>
+          )}
         </div>
 
         {errorMessage && (
@@ -211,11 +285,13 @@ export function TitleScreen() {
 
           <button
             type="button"
-            onClick={() => setShowTutorial(true)}
-            className="min-h-[42px] px-4 py-2 rounded-xl bg-transparent hover:bg-white/5 text-[#d7c6a3] text-xs font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            data-testid="start-tutorial-btn"
+            disabled={busy}
+            onClick={handleStartTutorial}
+            className="min-h-[42px] px-4 py-2 rounded-xl bg-[#15202b] hover:bg-[#1d2d3d] border border-[#d4aa54]/35 text-[#f0dec0] text-xs font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap"
           >
-            <BookOpen className="w-4 h-4" />
-            Rules & Tabletop Guide
+            <Compass className="w-4 h-4 text-[#d4aa54]" />
+            Interactive Tutorial (Play &amp; Learn)
           </button>
         </div>
       </div>
@@ -226,7 +302,6 @@ export function TitleScreen() {
         <span className="hidden sm:inline">Press Enter to Quick Start</span>
       </div>
 
-      {showTutorial && <TutorialModal onClose={() => setShowTutorial(false)} />}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </div>
   );

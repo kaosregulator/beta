@@ -12,6 +12,7 @@ export interface ProceduralTextureSet {
   terrainMaps: Record<TerrainType, THREE.CanvasTexture>;
   terrainNormal: THREE.CanvasTexture;
   terrainRoughness: THREE.CanvasTexture;
+  plainTileBack: THREE.CanvasTexture;
   numberTokens: Map<number, THREE.CanvasTexture>;
   harborSigns: Map<HarborKind, THREE.CanvasTexture>;
   diceFaces: THREE.CanvasTexture[]; // index 0..5 => faces 1..6
@@ -378,6 +379,40 @@ function createTerrainHeightMaps(aniso: number) {
   };
 }
 
+function createPlainTileBackTexture(aniso: number): THREE.CanvasTexture {
+  const { canvas, ctx } = makeCanvas(512, 512);
+  // Warm plain parchment-birch cardboard tabletop tile back
+  const grad = ctx.createRadialGradient(256, 256, 24, 256, 256, 320);
+  grad.addColorStop(0, '#ddd2ba');
+  grad.addColorStop(0.7, '#cfc1a4');
+  grad.addColorStop(1, '#b8a684');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 512, 512);
+
+  // Subtle linen/paper fiber grain
+  for (let i = 0; i < 650; i++) {
+    const x = (((Math.sin(i * 19.31) * 43758.5453) % 1) + 1) % 1 * 512;
+    const y = (((Math.sin(i * 91.77) * 24634.6345) % 1) + 1) % 1 * 512;
+    ctx.fillStyle = i % 2 === 0 ? 'rgba(110, 88, 56, 0.055)' : 'rgba(255, 252, 244, 0.08)';
+    ctx.fillRect(x, y, 2 + (i % 5), 1.5);
+  }
+
+  // Faint engraved compass-ring motif around the center token seat
+  ctx.strokeStyle = 'rgba(105, 82, 50, 0.22)';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(256, 256, 178, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(105, 82, 50, 0.14)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(256, 256, 160, 0, Math.PI * 2);
+  ctx.stroke();
+
+  return configureTexture(new THREE.CanvasTexture(canvas), true, aniso, 1);
+}
+
 function createOceanNormalMap(aniso: number): THREE.CanvasTexture {
   const { canvas, ctx } = makeCanvas(256, 256);
   const img = ctx.createImageData(256, 256);
@@ -421,35 +456,35 @@ function createNumberTokenTexture(num: number, aniso: number): THREE.CanvasTextu
   }
 
   // Engraved antique brass double ring
-  ctx.strokeStyle = '#6f5123';
-  ctx.lineWidth = 8;
+  ctx.strokeStyle = '#5c4119';
+  ctx.lineWidth = 10;
   ctx.beginPath();
-  ctx.arc(128, 128, 113, 0, Math.PI * 2);
+  ctx.arc(128, 128, 114, 0, Math.PI * 2);
   ctx.stroke();
 
-  ctx.strokeStyle = '#c2994c';
-  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#d1a450';
+  ctx.lineWidth = 4;
   ctx.beginPath();
   ctx.arc(128, 128, 99, 0, Math.PI * 2);
   ctx.stroke();
 
   const isHot = num === 6 || num === 8;
-  ctx.fillStyle = 'rgba(255,255,255,0.45)';
-  ctx.font = 'bold 112px Cinzel, Georgia, serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.font = 'bold 118px Cinzel, Georgia, serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(String(num), 129, 115);
+  ctx.fillText(String(num), 129, 114);
 
-  ctx.fillStyle = isHot ? '#a31818' : '#1b140f';
-  ctx.fillText(String(num), 128, 113);
+  ctx.fillStyle = isHot ? '#b41919' : '#140e0a';
+  ctx.fillText(String(num), 128, 112);
 
   // Probability pips
   const dots = 6 - Math.abs(7 - num);
-  const spacing = 18;
+  const spacing = 19;
   const startX = 128 - ((dots - 1) * spacing) / 2;
   for (let i = 0; i < dots; i++) {
     ctx.beginPath();
-    ctx.arc(startX + i * spacing, 184, 5.8, 0, Math.PI * 2);
+    ctx.arc(startX + i * spacing, 185, 6.4, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -621,6 +656,7 @@ export function createProceduralTextureSet(
   const roofSlateNormal = createRoofSlateNormal(aniso);
   const oceanNormal = createOceanNormalMap(aniso);
   const { terrainNormal, terrainRoughness } = createTerrainHeightMaps(aniso);
+  const plainTileBack = createPlainTileBackTexture(aniso);
 
   const terrains: TerrainType[] = [
     'forest',
@@ -666,6 +702,7 @@ export function createProceduralTextureSet(
     terrainMaps,
     terrainNormal,
     terrainRoughness,
+    plainTileBack,
     numberTokens,
     harborSigns,
     diceFaces,
@@ -680,6 +717,7 @@ export function createProceduralTextureSet(
       oceanNormal.dispose();
       terrainNormal.dispose();
       terrainRoughness.dispose();
+      plainTileBack.dispose();
       Object.values(terrainMaps).forEach((t) => t.dispose());
       numberTokens.forEach((t) => t.dispose());
       harborSigns.forEach((t) => t.dispose());

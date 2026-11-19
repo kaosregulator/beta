@@ -169,52 +169,82 @@ export function TVLobby() {
             </div>
 
             {/* Settings */}
-            <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-white/10">
-              <div>
-                <label
-                  htmlFor="lobby-preset"
-                  className="block text-xs text-[#cbb894] mb-1.5"
-                >
-                  Island Layout
-                </label>
-                <select
-                  id="lobby-preset"
-                  value={room.preset}
-                  onChange={(e) =>
-                    sendMessage({
-                      type: 'UPDATE_ROOM_SETTINGS',
-                      roomId: room.roomId,
-                      preset: e.target.value as BoardPreset,
-                    })
-                  }
-                  className="w-full h-10 rounded-lg bg-[#16212d] border border-white/15 px-3 text-xs text-[#f5efe2]"
-                >
-                  <option value="random_balanced">Balanced Random</option>
-                  <option value="standard">Classic Standard</option>
-                </select>
+            <div className="space-y-3 mt-4 pt-4 border-t border-white/10">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label
+                    htmlFor="lobby-preset"
+                    className="block text-xs text-[#cbb894] mb-1.5"
+                  >
+                    Island Layout
+                  </label>
+                  <select
+                    id="lobby-preset"
+                    value={room.preset}
+                    onChange={(e) => {
+                      const nextPreset = e.target.value as BoardPreset;
+                      sendMessage({
+                        type: 'UPDATE_ROOM_SETTINGS',
+                        roomId: room.roomId,
+                        preset: nextPreset,
+                        blindStart: nextPreset !== 'beginner_setup',
+                      });
+                    }}
+                    className="w-full h-10 rounded-lg bg-[#16212d] border border-white/15 px-3 text-xs text-[#f5efe2]"
+                  >
+                    <option value="random_balanced">Balanced Random (Shuffle &amp; Snake Draft)</option>
+                    <option value="standard">Classic Standard (Fixed Snake Draft)</option>
+                    <option value="beginner_setup">Beginner Set-Up (Pre-Placed Start)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="lobby-vp" className="block text-xs text-[#cbb894] mb-1.5">
+                    Victory Target
+                  </label>
+                  <select
+                    id="lobby-vp"
+                    value={room.victoryTarget}
+                    onChange={(e) =>
+                      sendMessage({
+                        type: 'UPDATE_ROOM_SETTINGS',
+                        roomId: room.roomId,
+                        victoryTarget: Number(e.target.value),
+                      })
+                    }
+                    className="w-full h-10 rounded-lg bg-[#16212d] border border-white/15 px-3 text-xs text-[#f5efe2]"
+                  >
+                    <option value={8}>8 Victory Points (Brisk)</option>
+                    <option value={10}>10 Victory Points (Standard)</option>
+                    <option value={12}>12 Victory Points (Epic)</option>
+                  </select>
+                </div>
               </div>
 
-              <div>
-                <label htmlFor="lobby-vp" className="block text-xs text-[#cbb894] mb-1.5">
-                  Victory Target
+              {room.preset !== 'beginner_setup' && (
+                <label className="flex items-center justify-between gap-3 rounded-lg bg-[#16212d] border border-white/10 px-3 py-2.5 cursor-pointer">
+                  <div>
+                    <div className="text-xs font-medium text-[#f5efe2]">
+                      Start Tiles Face-Down (Classic Shuffle)
+                    </div>
+                    <div className="text-[11px] text-[#9fb0c2]">
+                      Deal plain tiles with numbers only, shuffle &amp; flip to reveal the island
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={room.blindStart}
+                    onChange={(e) =>
+                      sendMessage({
+                        type: 'UPDATE_ROOM_SETTINGS',
+                        roomId: room.roomId,
+                        blindStart: e.target.checked,
+                      })
+                    }
+                    className="w-4 h-4 accent-[#d4aa54] cursor-pointer"
+                  />
                 </label>
-                <select
-                  id="lobby-vp"
-                  value={room.victoryTarget}
-                  onChange={(e) =>
-                    sendMessage({
-                      type: 'UPDATE_ROOM_SETTINGS',
-                      roomId: room.roomId,
-                      victoryTarget: Number(e.target.value),
-                    })
-                  }
-                  className="w-full h-10 rounded-lg bg-[#16212d] border border-white/15 px-3 text-xs text-[#f5efe2]"
-                >
-                  <option value={8}>8 Victory Points (Brisk)</option>
-                  <option value={10}>10 Victory Points (Standard)</option>
-                  <option value={12}>12 Victory Points (Epic)</option>
-                </select>
-              </div>
+              )}
             </div>
           </div>
 

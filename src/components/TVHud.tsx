@@ -1,18 +1,21 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Award,
   Camera,
   Check,
   ChevronDown,
   ChevronUp,
+  Compass,
   Dices,
   History,
   Home,
   Layers,
   Repeat,
+  RotateCw,
   Send,
   Settings,
   Shield,
+  Shuffle,
   Sparkles,
   Volume2,
   VolumeX,
@@ -27,6 +30,7 @@ import {
   type ResourceType,
 } from '../game/types';
 import { emptyResources, hasResources, totalResourceCount } from '../game/rules';
+import { getTutorialCoachCue } from '../game/tutorialEngine';
 import { useGameStore } from '../store/useGameStore';
 import { DEV_CARD_META, DevCardIllustration, ResourceIcon } from './ResourceArt';
 import { SettingsModal } from './SettingsModal';
@@ -42,6 +46,10 @@ export function TVHud() {
   const toggleMuted = useGameStore((s) => s.toggleMuted);
   const placementIntent = useGameStore((s) => s.placementIntent);
   const setPlacementIntent = useGameStore((s) => s.setPlacementIntent);
+  const subDrawer = useGameStore((s) => s.activeSubDrawer);
+  const setSubDrawer = useGameStore((s) => s.setActiveSubDrawer);
+  const showBoardTooltips = useGameStore((s) => s.showBoardTooltips);
+  const setShowBoardTooltips = useGameStore((s) => s.setShowBoardTooltips);
   const triggerCameraCommand = useGameStore((s) => s.triggerCameraCommand);
   const dispatchGameAction = useGameStore((s) => s.dispatchGameAction);
   const leaveToTitle = useGameStore((s) => s.leaveToTitle);
@@ -49,9 +57,9 @@ export function TVHud() {
   const clearError = useGameStore((s) => s.clearError);
 
   const [dockCollapsed, setDockCollapsed] = useState(false);
-  const [subDrawer, setSubDrawer] = useState<'none' | 'trade' | 'cards'>('none');
   const [showChronicle, setShowChronicle] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showCoach, setShowCoach] = useState(true);
 
   const [tradeGive, setTradeGive] = useState<ResourceType>('timber');
   const [tradeGet, setTradeGet] = useState<ResourceType>('ore');
@@ -60,6 +68,19 @@ export function TVHud() {
   const [discardDraft, setDiscardDraft] = useState<ResourceBundle>(emptyResources());
   const [cardTargetRes1, setCardTargetRes1] = useState<ResourceType>('ore');
   const [cardTargetRes2, setCardTargetRes2] = useState<ResourceType>('grain');
+
+  const tutorialMission = room?.mode === 'tutorial' ? room.tutorialMission : undefined;
+
+  useEffect(() => {
+    if (tutorialMission !== 'turn1_trade' && tutorialMission !== 'turn4_play_knight') {
+      setSubDrawer('none');
+    }
+    if (tutorialMission) {
+      setShowCoach(true);
+      setShowBoardTooltips(true);
+      setDockCollapsed(false);
+    }
+  }, [tutorialMission, setSubDrawer, setShowBoardTooltips]);
 
   const game = room?.game;
   if (!room || !game) return null;
@@ -87,6 +108,27 @@ export function TVHud() {
   const requiredDiscard = Math.floor(totalResourceCount(myRes) / 2);
   const draftedDiscardCount = totalResourceCount(discardDraft);
 
+  const canBuildRoad =
+    isMyTurn &&
+    game.phase === 'main' &&
+    hasResources(myRes, BUILD_COSTS.road) &&
+    (myPublic?.roadsRemaining ?? 0) > 0;
+  const canBuildSettlement =
+    isMyTurn &&
+    game.phase === 'main' &&
+    hasResources(myRes, BUILD_COSTS.settlement) &&
+    (myPublic?.settlementsRemaining ?? 0) > 0;
+  const canBuildCity =
+    isMyTurn &&
+    game.phase === 'main' &&
+    hasResources(myRes, BUILD_COSTS.city) &&
+    (myPublic?.citiesRemaining ?? 0) > 0;
+  const canBuyCard =
+    isMyTurn &&
+    game.phase === 'main' &&
+    game.devDeckRemaining > 0 &&
+    hasResources(myRes, BUILD_COSTS.dev_card);
+
   const incomingOffers = playerId
     ? game.activeTradeOffers.filter(
         (o) =>
@@ -96,11 +138,43 @@ export function TVHud() {
       )
     : [];
 
+  const revealedCount = game.hexes.filter((h) => h.revealed).length;
+  const unrevealedHexes = game.hexes.filter((h) => !h.revealed);
+  const nextUnrevealedHex = unrevealedHexes[0] ?? null;
+  const revealActorId = playerId ?? game.players[0]?.id ?? null;
+
+  const coachCue =
+    room.mode === 'tutorial' && room.tutorialMission
+      ? getTutorialCoachCue(room.tutorialMission, game, playerId, {
+          placementIntent,
+          subDrawer,
+        })
+      : null;
+
+  const highlightRing = (control: string) =>
+    coachCue?.highlightControl === control
+      ? 'ring-2 ring-[#f5d88c] border-[#f5d88c]'
+      : '';
+
+  const openTradeDrawer = () => {
+    const next = subDrawer === 'trade' ? 'none' : 'trade';
+    if (next === 'trade') {
+      const affordable = RES_KEYS.find((r) => myRes[r] >= ratios[r]);
+      if (affordable) {
+        setTradeGive(affordable);
+        if (tradeGet === affordable) {
+          setTradeGet(RES_KEYS.find((r) => r !== affordable) ?? 'ore');
+        }
+      }
+    }
+    setSubDrawer(next);
+  };
+
   return (
     <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-4 md:p-5">
       {/* Top Perimeter Strip: Faction Standings (Left) + Turn/Utilities (Right) */}
       <div className="flex flex-wrap items-start justify-between gap-3">
-        {/* Left: Compact Faction Standings & Active Turn Banner */}
+        {/* Left: Compact Faction Standings, Active Turn Banner & Live Tutorial Coach */}
         <div className="pointer-events-auto flex flex-col gap-2 max-w-full">
           <div className="bg-[#101821]/92 border border-[#d4aa54]/35 rounded-xl px-3.5 py-2.5 flex items-center gap-3 shadow-lg">
             <span
@@ -167,9 +241,45 @@ export function TVHud() {
               );
             })}
           </div>
+
+          {/* Live Play-and-Learn Tutorial Coach Banner (Non-blocking perimeter anchor) */}
+          {coachCue && showCoach && (
+            <div
+              data-testid="tutorial-coach-banner"
+              data-mission={coachCue.missionId}
+              className="bg-[#101821]/95 border border-[#f5d88c]/60 rounded-xl px-4 py-3 max-w-md shadow-2xl space-y-1.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono-num text-[11px] font-bold px-2 py-0.5 rounded-md bg-[#1d2d3d] border border-[#d4aa54]/45 text-[#f5d88c]">
+                    {coachCue.completed
+                      ? 'COMPLETE'
+                      : `STEP ${coachCue.stepIndex}/${coachCue.totalSteps}`}
+                  </span>
+                  <span className="font-display text-xs font-bold text-[#f7eed7] tracking-wide">
+                    {coachCue.title}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowCoach(false)}
+                  aria-label="Hide tutorial coach"
+                  className="text-[#94a3b8] hover:text-white cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <p className="text-xs text-[#e2e8f0] leading-relaxed">
+                {coachCue.instruction}
+              </p>
+              <p className="text-[11px] text-[#cbb894] leading-snug">
+                Rule Tip: {coachCue.ruleTip}
+              </p>
+            </div>
+          )}
         </div>
 
-        {/* Right: Room PIN (TV Mode), Camera, Chronicle, Settings, Mute & Home */}
+        {/* Right: Room PIN (TV Mode), Camera, Chronicle, Coach Toggle, Settings, Mute & Home */}
         <div className="pointer-events-auto relative flex items-center gap-2">
           {room.mode === 'tv_host' && (
             <div className="bg-[#101821]/92 border border-[#d4aa54]/35 rounded-xl px-3 py-2 text-xs">
@@ -179,6 +289,38 @@ export function TVHud() {
               </span>
             </div>
           )}
+
+          {coachCue && (
+            <button
+              type="button"
+              data-testid="toggle-coach-btn"
+              onClick={() => setShowCoach((v) => !v)}
+              aria-label={showCoach ? 'Hide tutorial coach' : 'Show tutorial coach'}
+              className={`h-10 px-3 rounded-xl border text-xs font-medium flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                showCoach
+                  ? 'bg-[#1a2736] border-[#d4aa54]/60 text-[#f5d88c]'
+                  : 'bg-[#101821]/92 border-white/15 hover:border-[#d4aa54]/50 text-[#e2e8f0]'
+              }`}
+            >
+              <Compass className="w-3.5 h-3.5 text-[#d4aa54]" />
+              <span className="hidden sm:inline">{showCoach ? 'Coach On' : 'Show Coach'}</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            data-testid="toggle-board-tooltips-btn"
+            onClick={() => setShowBoardTooltips(!showBoardTooltips)}
+            aria-label={showBoardTooltips ? 'Hide on-board tooltips' : 'Show on-board tooltips'}
+            className={`h-10 px-3 rounded-xl border text-xs font-medium flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+              showBoardTooltips
+                ? 'bg-[#1a2736] border-[#d4aa54]/60 text-[#f5d88c]'
+                : 'bg-[#101821]/92 border-white/15 hover:border-[#d4aa54]/50 text-[#e2e8f0]'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-[#d4aa54]" />
+            <span className="hidden sm:inline">{showBoardTooltips ? 'Board Hints' : 'Hints Off'}</span>
+          </button>
 
           <button
             type="button"
@@ -478,7 +620,7 @@ export function TVHud() {
                     >
                       {RES_KEYS.map((r) => (
                         <option key={r} value={r}>
-                          {RESOURCE_META[r].label}
+                          {RESOURCE_META[r].label} (Bank {game.bank?.[r] ?? 19})
                         </option>
                       ))}
                     </select>
@@ -489,6 +631,7 @@ export function TVHud() {
                       !isMyTurn ||
                       game.phase !== 'main' ||
                       tradeGive === tradeGet ||
+                      (game.bank?.[tradeGet] ?? 19) < 1 ||
                       myRes[tradeGive] < ratios[tradeGive]
                     }
                     onClick={() =>
@@ -499,7 +642,7 @@ export function TVHud() {
                         receive: tradeGet,
                       })
                     }
-                    className="h-9 px-4 rounded-lg bg-[#b88635] disabled:opacity-40 text-[#14100a] font-semibold cursor-pointer whitespace-nowrap"
+                    className={`h-9 px-4 rounded-lg bg-[#b88635] disabled:opacity-40 text-[#14100a] font-semibold cursor-pointer whitespace-nowrap ${highlightRing('trade_confirm')}`}
                   >
                     Confirm {ratios[tradeGive]}:1 Trade
                   </button>
@@ -638,7 +781,9 @@ export function TVHud() {
                                     resource2: cardTargetRes2,
                                   })
                                 }
-                                className="px-2.5 py-1.5 rounded-lg bg-[#b88635] disabled:opacity-35 text-[#14100a] font-semibold cursor-pointer"
+                                className={`px-2.5 py-1.5 rounded-lg bg-[#b88635] disabled:opacity-35 text-[#14100a] font-semibold cursor-pointer ${
+                                  card.type === 'knight' ? highlightRing('card_play') : ''
+                                }`}
                               >
                                 Play
                               </button>
@@ -652,11 +797,80 @@ export function TVHud() {
             )}
 
             {/* Main Dock Row */}
-            {room.mode === 'tv_host' || !playerId ? (
+            {game.phase === 'tile_reveal' ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2.5 text-[#e2e8f0]">
+                  <span
+                    data-testid="tile-reveal-counter"
+                    className="font-mono-num font-bold px-2.5 py-1 rounded-lg bg-[#172330] border border-[#d4aa54]/40 text-[#f5d88c]"
+                  >
+                    {revealedCount}/19 Revealed
+                  </span>
+                  <span className="text-[#cbd5e1]">
+                    Click any plain numbered tile on the board to flip it over, or shuffle before revealing.
+                  </span>
+                </div>
+                {revealActorId && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={unrevealedHexes.length < 2}
+                      onClick={() =>
+                        dispatchGameAction({
+                          type: 'SHUFFLE_TILES',
+                          playerId: revealActorId,
+                        })
+                      }
+                      className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#1a2b3d] hover:bg-[#233a52] border border-[#d4aa54]/45 disabled:opacity-40 text-[#f7eed7] font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    >
+                      <Shuffle className="w-3.5 h-3.5 text-[#d4aa54]" />
+                      Shuffle Tiles
+                    </button>
+                    {nextUnrevealedHex && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          dispatchGameAction({
+                            type: 'FLIP_TILE',
+                            playerId: revealActorId,
+                            hexId: nextUnrevealedHex.id,
+                          })
+                        }
+                        className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#172330] hover:bg-[#223244] border border-white/15 text-[#f5efe2] font-medium flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                      >
+                        <RotateCw className="w-3.5 h-3.5 text-[#8ac4e8]" />
+                        Flip Next
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        dispatchGameAction({
+                          type: 'FLIP_ALL_TILES',
+                          playerId: revealActorId,
+                        })
+                      }
+                      className={`min-h-[40px] px-4 py-2 rounded-xl bg-[#b88635] hover:bg-[#cc9842] text-[#14100a] font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${highlightRing('board_flip')}`}
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Flip All &amp; Begin
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : room.mode === 'tv_host' || !playerId ? (
               <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
                 <div className="flex items-center gap-2 text-[#e2e8f0]">
                   <Sparkles className="w-4 h-4 text-[#d4aa54] shrink-0" />
-                  <span>{latestEvent?.message ?? 'Ready on the tabletop.'}</span>
+                  <span
+                    className={
+                      latestEvent?.type === 'build' || latestEvent?.type === 'award'
+                        ? 'text-[#f5d88c] font-medium'
+                        : ''
+                    }
+                  >
+                    {latestEvent?.message ?? 'Ready on the tabletop.'}
+                  </span>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -708,7 +922,7 @@ export function TVHud() {
                       onClick={() =>
                         dispatchGameAction({ type: 'ROLL_DICE', playerId })
                       }
-                      className="min-h-[42px] px-4 py-2 rounded-xl bg-[#b88635] hover:bg-[#cc9842] text-[#14100a] font-semibold text-xs flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                      className={`min-h-[42px] px-4 py-2 rounded-xl bg-[#b88635] hover:bg-[#cc9842] text-[#14100a] font-semibold text-xs flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${highlightRing('roll')}`}
                     >
                       <Dices className="w-4 h-4" />
                       Roll Dice
@@ -717,92 +931,80 @@ export function TVHud() {
 
                   <button
                     type="button"
-                    disabled={
-                      !isMyTurn ||
-                      game.phase !== 'main' ||
-                      !hasResources(myRes, BUILD_COSTS.road) ||
-                      (myPublic?.roadsRemaining ?? 0) <= 0
-                    }
+                    disabled={!canBuildRoad}
                     onClick={() =>
                       setPlacementIntent(placementIntent === 'road' ? null : 'road')
                     }
-                    className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-medium border cursor-pointer disabled:opacity-35 whitespace-nowrap ${
+                    className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-medium border cursor-pointer disabled:opacity-35 whitespace-nowrap transition-colors ${
                       placementIntent === 'road'
                         ? 'bg-[#b88635] text-[#14100a] border-[#f5d88c]'
-                        : 'bg-[#16212d] text-[#f5efe2] border-white/15'
-                    }`}
+                        : canBuildRoad
+                          ? 'bg-[#1a2b3d] text-[#f7eed7] border-[#d4aa54]/60 hover:bg-[#22374d]'
+                          : 'bg-[#16212d] text-[#f5efe2] border-white/15'
+                    } ${highlightRing('road')}`}
                   >
-                    Road (T+B)
+                    Road · T+B
                   </button>
 
                   <button
                     type="button"
-                    disabled={
-                      !isMyTurn ||
-                      game.phase !== 'main' ||
-                      !hasResources(myRes, BUILD_COSTS.settlement) ||
-                      (myPublic?.settlementsRemaining ?? 0) <= 0
-                    }
+                    disabled={!canBuildSettlement}
                     onClick={() =>
                       setPlacementIntent(
                         placementIntent === 'settlement' ? null : 'settlement',
                       )
                     }
-                    className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-medium border cursor-pointer disabled:opacity-35 whitespace-nowrap ${
+                    className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-medium border cursor-pointer disabled:opacity-35 whitespace-nowrap transition-colors ${
                       placementIntent === 'settlement'
                         ? 'bg-[#b88635] text-[#14100a] border-[#f5d88c]'
-                        : 'bg-[#16212d] text-[#f5efe2] border-white/15'
-                    }`}
+                        : canBuildSettlement
+                          ? 'bg-[#1a2b3d] text-[#f7eed7] border-[#d4aa54]/60 hover:bg-[#22374d]'
+                          : 'bg-[#16212d] text-[#f5efe2] border-white/15'
+                    } ${highlightRing('settlement')}`}
                   >
-                    Settlement
+                    Settlement · +1 VP
                   </button>
 
                   <button
                     type="button"
-                    disabled={
-                      !isMyTurn ||
-                      game.phase !== 'main' ||
-                      !hasResources(myRes, BUILD_COSTS.city) ||
-                      (myPublic?.citiesRemaining ?? 0) <= 0
-                    }
+                    disabled={!canBuildCity}
                     onClick={() =>
                       setPlacementIntent(placementIntent === 'city' ? null : 'city')
                     }
-                    className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-medium border cursor-pointer disabled:opacity-35 whitespace-nowrap ${
+                    className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-medium border cursor-pointer disabled:opacity-35 whitespace-nowrap transition-colors ${
                       placementIntent === 'city'
                         ? 'bg-[#b88635] text-[#14100a] border-[#f5d88c]'
-                        : 'bg-[#16212d] text-[#f5efe2] border-white/15'
-                    }`}
+                        : canBuildCity
+                          ? 'bg-[#1a2b3d] text-[#f7eed7] border-[#d4aa54]/60 hover:bg-[#22374d]'
+                          : 'bg-[#16212d] text-[#f5efe2] border-white/15'
+                    } ${highlightRing('city')}`}
                   >
-                    City (2G+3O)
+                    City · +2 VP
                   </button>
 
                   <button
                     type="button"
-                    disabled={
-                      !isMyTurn ||
-                      game.phase !== 'main' ||
-                      game.devDeckRemaining === 0 ||
-                      !hasResources(myRes, BUILD_COSTS.dev_card)
-                    }
+                    disabled={!canBuyCard}
                     onClick={() =>
                       dispatchGameAction({ type: 'BUY_DEV_CARD', playerId })
                     }
-                    className="min-h-[40px] px-3 py-2 rounded-xl bg-[#16212d] border border-white/15 disabled:opacity-35 text-xs font-medium text-[#f5efe2] cursor-pointer whitespace-nowrap"
+                    className={`min-h-[40px] px-3 py-2 rounded-xl border disabled:opacity-35 text-xs font-medium cursor-pointer whitespace-nowrap transition-colors ${
+                      canBuyCard
+                        ? 'bg-[#1a2b3d] text-[#f7eed7] border-[#d4aa54]/60 hover:bg-[#22374d]'
+                        : 'bg-[#16212d] text-[#f5efe2] border-white/15'
+                    } ${highlightRing('buy_card')}`}
                   >
                     Buy Card
                   </button>
 
                   <button
                     type="button"
-                    onClick={() =>
-                      setSubDrawer((d) => (d === 'trade' ? 'none' : 'trade'))
-                    }
+                    onClick={openTradeDrawer}
                     className={`min-h-[40px] px-3 py-2 rounded-xl border text-xs font-medium flex items-center gap-1 cursor-pointer whitespace-nowrap ${
                       subDrawer === 'trade'
                         ? 'bg-[#1f3142] border-[#d4aa54] text-[#f5d88c]'
                         : 'bg-[#16212d] border-white/15 text-[#cbd5e1]'
-                    }`}
+                    } ${highlightRing('trade')}`}
                   >
                     <Repeat className="w-3.5 h-3.5" /> Trade
                   </button>
@@ -810,13 +1012,13 @@ export function TVHud() {
                   <button
                     type="button"
                     onClick={() =>
-                      setSubDrawer((d) => (d === 'cards' ? 'none' : 'cards'))
+                      setSubDrawer(subDrawer === 'cards' ? 'none' : 'cards')
                     }
                     className={`min-h-[40px] px-3 py-2 rounded-xl border text-xs font-medium flex items-center gap-1 cursor-pointer whitespace-nowrap ${
                       subDrawer === 'cards'
                         ? 'bg-[#1f3142] border-[#d4aa54] text-[#f5d88c]'
                         : 'bg-[#16212d] border-white/15 text-[#cbd5e1]'
-                    }`}
+                    } ${highlightRing('cards')}`}
                   >
                     <Layers className="w-3.5 h-3.5" /> Cards
                   </button>
@@ -827,7 +1029,7 @@ export function TVHud() {
                       onClick={() =>
                         dispatchGameAction({ type: 'END_TURN', playerId })
                       }
-                      className="min-h-[42px] px-4 py-2 rounded-xl bg-[#24663c] hover:bg-[#2d7d4a] text-white font-semibold text-xs cursor-pointer whitespace-nowrap"
+                      className={`min-h-[42px] px-4 py-2 rounded-xl bg-[#24663c] hover:bg-[#2d7d4a] text-white font-semibold text-xs cursor-pointer whitespace-nowrap ${highlightRing('end_turn')}`}
                     >
                       End Turn
                     </button>

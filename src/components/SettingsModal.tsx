@@ -123,8 +123,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => setQuality(e.target.value as QualityPreset)}
               className="w-full h-10 rounded-xl bg-[#182431] border border-white/15 px-3 text-xs text-[#f5efe2]"
             >
-              <option value="high">High Detail (Shadows, Motes & Waves)</option>
-              <option value="balanced">Balanced (Crisp Shadows, Moderate DPR)</option>
+              <option value="high">High Detail (Bloom, DOF & Shadows)</option>
+              <option value="balanced">Balanced (Bloom, Shadows, Moderate DPR)</option>
               <option value="reduced">Reduced Effects (Best Battery & Speed)</option>
             </select>
           </label>

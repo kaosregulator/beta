@@ -29,6 +29,7 @@ export default defineConfig(() => {
       },
     ],
     resolve: {
+      dedupe: ['three'],
       alias: {
         '@': path.resolve(__dirname, '.'),
       },

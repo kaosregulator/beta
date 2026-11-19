@@ -1,4 +1,9 @@
-import { createDevDeck, generateBoard } from './boardGen';
+import {
+  BEGINNER_START_SEATS,
+  createDevDeck,
+  generateBoard,
+  shuffleHexTiles,
+} from './boardGen';
 import {
   BUILD_COSTS,
   PIECE_LIMITS,
@@ -8,6 +13,7 @@ import {
   type GameAction,
   type GameEvent,
   type GameState,
+  type HarvestGrant,
   type PlayerState,
   type PrivatePlayerState,
   type PublicGameState,
@@ -15,8 +21,20 @@ import {
   type ResourceType,
 } from './types';
 
+const RESOURCE_KEYS: readonly ResourceType[] = [
+  'timber',
+  'wool',
+  'grain',
+  'brick',
+  'ore',
+];
+
 export function emptyResources(): ResourceBundle {
   return { timber: 0, wool: 0, grain: 0, brick: 0, ore: 0 };
+}
+
+export function initialBank(): ResourceBundle {
+  return { timber: 19, wool: 19, grain: 19, brick: 19, ore: 19 };
 }
 
 export function totalResourceCount(r: ResourceBundle): number {
@@ -85,6 +103,7 @@ function appendEvent(
 export interface CreateGameOptions {
   roomId: string;
   preset?: BoardPreset;
+  blindStart?: boolean;
   victoryTarget?: number;
   players: Array<{
     id: string;
@@ -99,7 +118,8 @@ export interface CreateGameOptions {
 export function createInitialGameState(options: CreateGameOptions): GameState {
   const rng = options.rng ?? Math.random;
   const preset = options.preset ?? 'random_balanced';
-  const board = generateBoard(preset, rng);
+  const blindStart = Boolean(options.blindStart) && preset !== 'beginner_setup';
+  const board = generateBoard(preset, rng, { revealed: !blindStart });
 
   const players: PlayerState[] = options.players.map((p) => ({
     id: p.id,
@@ -124,7 +144,12 @@ export function createInitialGameState(options: CreateGameOptions): GameState {
     roomId: options.roomId,
     preset,
     victoryTarget: options.victoryTarget ?? 10,
-    phase: 'setup_forward_settlement',
+    phase:
+      preset === 'beginner_setup'
+        ? 'roll'
+        : blindStart
+          ? 'tile_reveal'
+          : 'setup_forward_settlement',
     turnNumber: 1,
     players,
     activePlayerIndex: 0,
@@ -135,9 +160,12 @@ export function createInitialGameState(options: CreateGameOptions): GameState {
     edges: board.edges,
     harbors: board.harbors,
     devDeck: createDevDeck(rng),
+    bank: initialBank(),
     devCardPlayedThisTurn: false,
     dice: null,
     diceRollSeq: 0,
+    shuffleSeq: 0,
+    lastHarvestGrants: [],
     pendingDiscardPlayerIds: [],
     stealCandidateIds: [],
     activeTradeOffers: [],
@@ -147,11 +175,62 @@ export function createInitialGameState(options: CreateGameOptions): GameState {
     events: [],
   };
 
-  if (players.length > 0) {
+  if (preset === 'beginner_setup') {
+    const vertexById = new Map(state.vertices.map((v) => [v.id, v]));
+    const edgeById = new Map(state.edges.map((e) => [e.id, e]));
+    const hexById = new Map(state.hexes.map((h) => [h.id, h]));
+
+    players.forEach((p, idx) => {
+      const seat = BEGINNER_START_SEATS[idx];
+      if (!seat) return;
+
+      const vStar = vertexById.get(seat.starredSettlementVertexId);
+      const eStar = edgeById.get(seat.starredRoadEdgeId);
+      const vSecond = vertexById.get(seat.secondSettlementVertexId);
+      const eSecond = edgeById.get(seat.secondRoadEdgeId);
+
+      if (vStar) {
+        vStar.building = { ownerId: p.id, type: 'settlement' };
+        p.settlementsBuilt += 1;
+        for (const hId of vStar.adjacentHexIds) {
+          const hex = hexById.get(hId);
+          if (!hex) continue;
+          const res = TERRAIN_RESOURCE[hex.terrain];
+          if (res && state.bank[res] > 0) {
+            state.bank[res] -= 1;
+            p.resources[res] += 1;
+          }
+        }
+      }
+      if (eStar) {
+        eStar.ownerId = p.id;
+        p.roadsBuilt += 1;
+      }
+      if (vSecond) {
+        vSecond.building = { ownerId: p.id, type: 'settlement' };
+        p.settlementsBuilt += 1;
+      }
+      if (eSecond) {
+        eSecond.ownerId = p.id;
+        p.roadsBuilt += 1;
+      }
+    });
+
+    recomputeAwardsAndVP(state);
+    if (players.length > 0) {
+      appendEvent(state, {
+        type: 'turn',
+        playerId: players[0].id,
+        message: `Beginner Set-Up ready: initial settlements, roads, and starting resources dealt. ${players[0].name} rolls to start Turn 1.`,
+      });
+    }
+  } else if (players.length > 0) {
     appendEvent(state, {
       type: 'turn',
       playerId: players[0].id,
-      message: `${players[0].name} begins initial settlement placement.`,
+      message: blindStart
+        ? 'Tiles dealt face-down with numbers showing. Shuffle or flip tiles to reveal the island!'
+        : `${players[0].name} begins initial settlement placement.`,
     });
   }
 
@@ -386,7 +465,7 @@ export function recomputeAwardsAndVP(state: GameState): void {
     p.totalVP = p.publicVP + hiddenVP;
   }
 
-  // Check victory condition (active player winning on their turn, or anyone hitting target)
+  // Check victory condition (official rule: a player can only win on their own turn)
   const activePlayer = state.players[state.activePlayerIndex];
   if (activePlayer && activePlayer.totalVP >= state.victoryTarget) {
     state.winnerId = activePlayer.id;
@@ -395,18 +474,6 @@ export function recomputeAwardsAndVP(state: GameState): void {
       type: 'victory',
       playerId: activePlayer.id,
       message: `${activePlayer.name} wins the island with ${activePlayer.totalVP} Victory Points!`,
-    });
-    return;
-  }
-
-  const anyWinner = state.players.find((p) => p.totalVP >= state.victoryTarget);
-  if (anyWinner) {
-    state.winnerId = anyWinner.id;
-    state.phase = 'finished';
-    appendEvent(state, {
-      type: 'victory',
-      playerId: anyWinner.id,
-      message: `${anyWinner.name} wins the island with ${anyWinner.totalVP} Victory Points!`,
     });
   }
 }
@@ -432,8 +499,15 @@ export function applyAction(
     return { ok: false, error: 'Unknown player.' };
   }
 
-  // Actions allowed outside activePlayer turn: DISCARD_RESOURCES and RESPOND_TRADE_OFFER
+  // Actions allowed outside activePlayer turn: DISCARD_RESOURCES, RESPOND_TRADE_OFFER, and tile_reveal shuffle/flips
+  const isTileRevealAction =
+    state.phase === 'tile_reveal' &&
+    (action.type === 'SHUFFLE_TILES' ||
+      action.type === 'FLIP_TILE' ||
+      action.type === 'FLIP_ALL_TILES');
+
   if (
+    !isTileRevealAction &&
     action.type !== 'DISCARD_RESOURCES' &&
     action.type !== 'RESPOND_TRADE_OFFER' &&
     actor.id !== activePlayer.id
@@ -442,6 +516,66 @@ export function applyAction(
   }
 
   switch (action.type) {
+    case 'SHUFFLE_TILES': {
+      if (state.phase !== 'tile_reveal') {
+        return { ok: false, error: 'Tiles can only be shuffled before setup begins.' };
+      }
+      const unrevealedCount = state.hexes.filter((h) => !h.revealed).length;
+      if (unrevealedCount < 2) {
+        return { ok: false, error: 'Not enough face-down tiles left to shuffle.' };
+      }
+      state.hexes = shuffleHexTiles(state.hexes, state.preset, rng);
+      state.shuffleSeq += 1;
+      appendEvent(state, {
+        type: 'turn',
+        playerId: actor.id,
+        message: `${actor.name} shuffled the face-down island tiles.`,
+      });
+      return { ok: true, state };
+    }
+
+    case 'FLIP_TILE': {
+      if (state.phase !== 'tile_reveal') {
+        return { ok: false, error: 'All tiles have already been revealed.' };
+      }
+      const hex = state.hexes.find((h) => h.id === action.hexId);
+      if (!hex) {
+        return { ok: false, error: 'Invalid tile.' };
+      }
+      if (hex.revealed) {
+        return { ok: false, error: 'Tile is already revealed.' };
+      }
+      hex.revealed = true;
+      const allRevealed = state.hexes.every((h) => h.revealed);
+      if (allRevealed) {
+        state.phase = 'setup_forward_settlement';
+        state.activePlayerIndex = 0;
+        appendEvent(state, {
+          type: 'turn',
+          playerId: state.players[0]?.id,
+          message: `All island tiles revealed! ${state.players[0]?.name} begins initial settlement placement.`,
+        });
+      }
+      return { ok: true, state };
+    }
+
+    case 'FLIP_ALL_TILES': {
+      if (state.phase !== 'tile_reveal') {
+        return { ok: false, error: 'All tiles have already been revealed.' };
+      }
+      for (const h of state.hexes) {
+        h.revealed = true;
+      }
+      state.phase = 'setup_forward_settlement';
+      state.activePlayerIndex = 0;
+      appendEvent(state, {
+        type: 'turn',
+        playerId: state.players[0]?.id,
+        message: `${actor.name} flipped all island tiles! ${state.players[0]?.name} begins initial settlement placement.`,
+      });
+      return { ok: true, state };
+    }
+
     case 'PLACE_SETUP_SETTLEMENT': {
       if (
         state.phase !== 'setup_forward_settlement' &&
@@ -467,7 +601,10 @@ export function applyAction(
           const hex = state.hexes.find((h) => h.id === hId);
           if (!hex) continue;
           const res = TERRAIN_RESOURCE[hex.terrain];
-          if (res) gained[res] += 1;
+          if (res && state.bank[res] > 0) {
+            state.bank[res] -= 1;
+            gained[res] += 1;
+          }
         }
         actor.resources = addResources(actor.resources, gained);
       }
@@ -543,6 +680,7 @@ export function applyAction(
       const sum = d1 + d2;
       state.dice = [d1, d2];
       state.diceRollSeq += 1;
+      state.lastHarvestGrants = [];
 
       if (sum === 7) {
         const mustDiscard = state.players
@@ -570,29 +708,102 @@ export function applyAction(
         return { ok: true, state };
       }
 
-      // Distribute resources for matching tiles without robber
+      // Distribute resources for matching tiles without robber, enforcing the 95-card Bank supply
       const matchingHexes = state.hexes.filter(
         (h) => h.numberToken === sum && !h.hasRobber,
       );
       const vertexById = new Map(state.vertices.map((v) => [v.id, v]));
-      const gainsByPlayer = new Map<string, ResourceBundle>();
+      const demandByPlayer = new Map<string, ResourceBundle>();
+      const rawHexDemands: HarvestGrant[] = [];
 
       for (const hex of matchingHexes) {
         const res = TERRAIN_RESOURCE[hex.terrain];
         if (!res) continue;
 
+        const hexPlayerAmounts = new Map<string, number>();
         for (const v of vertexById.values()) {
           if (!v.building || !v.adjacentHexIds.includes(hex.id)) continue;
           const amount = v.building.type === 'city' ? 2 : 1;
-          const pGain = gainsByPlayer.get(v.building.ownerId) ?? emptyResources();
-          pGain[res] += amount;
-          gainsByPlayer.set(v.building.ownerId, pGain);
+          const ownerId = v.building.ownerId;
+          const pDemand = demandByPlayer.get(ownerId) ?? emptyResources();
+          pDemand[res] += amount;
+          demandByPlayer.set(ownerId, pDemand);
+          hexPlayerAmounts.set(ownerId, (hexPlayerAmounts.get(ownerId) ?? 0) + amount);
+        }
+
+        for (const [ownerId, amount] of hexPlayerAmounts) {
+          rawHexDemands.push({
+            hexId: hex.id,
+            terrain: hex.terrain,
+            numberToken: sum,
+            playerId: ownerId,
+            resource: res,
+            amount,
+            hexX: hex.x,
+            hexZ: hex.z,
+          });
         }
       }
 
+      const grantedByPlayer = new Map<string, ResourceBundle>();
+      const finalGrants: HarvestGrant[] = [];
+      const shortageNotes: string[] = [];
+
+      for (const res of RESOURCE_KEYS) {
+        let totalDemand = 0;
+        const claimants: Array<{ playerId: string; qty: number }> = [];
+        for (const p of state.players) {
+          const qty = demandByPlayer.get(p.id)?.[res] ?? 0;
+          if (qty > 0) {
+            totalDemand += qty;
+            claimants.push({ playerId: p.id, qty });
+          }
+        }
+        if (totalDemand === 0) continue;
+
+        const available = state.bank[res];
+        if (totalDemand <= available) {
+          state.bank[res] -= totalDemand;
+          for (const c of claimants) {
+            const g = grantedByPlayer.get(c.playerId) ?? emptyResources();
+            g[res] += c.qty;
+            grantedByPlayer.set(c.playerId, g);
+          }
+          for (const item of rawHexDemands) {
+            if (item.resource === res) {
+              finalGrants.push(item);
+            }
+          }
+        } else if (claimants.length === 1) {
+          // Single recipient gets whatever remains in the Bank
+          if (available > 0) {
+            const sole = claimants[0];
+            const g = grantedByPlayer.get(sole.playerId) ?? emptyResources();
+            g[res] += available;
+            grantedByPlayer.set(sole.playerId, g);
+            state.bank[res] = 0;
+
+            let rem = available;
+            for (const item of rawHexDemands) {
+              if (item.resource === res && item.playerId === sole.playerId && rem > 0) {
+                const take = Math.min(rem, item.amount);
+                finalGrants.push({ ...item, amount: take });
+                rem -= take;
+              }
+            }
+          }
+          shortageNotes.push(`Bank low on ${res}`);
+        } else {
+          // 2+ players need this resource and Bank lacks enough -> none distributed
+          shortageNotes.push(`Bank shortage: no ${res} dealt`);
+        }
+      }
+
+      state.lastHarvestGrants = finalGrants;
+
       const summaryParts: string[] = [];
       for (const p of state.players) {
-        const gain = gainsByPlayer.get(p.id);
+        const gain = grantedByPlayer.get(p.id);
         if (gain && totalResourceCount(gain) > 0) {
           p.resources = addResources(p.resources, gain);
           summaryParts.push(`${p.name} +${totalResourceCount(gain)}`);
@@ -600,13 +811,15 @@ export function applyAction(
       }
 
       state.phase = 'main';
+      const detailText =
+        summaryParts.length > 0
+          ? summaryParts.join(', ')
+          : 'no resources yielded';
+      const suffix = shortageNotes.length > 0 ? `; ${shortageNotes.join('; ')}` : '';
       appendEvent(state, {
         type: 'dice',
         playerId: actor.id,
-        message:
-          summaryParts.length > 0
-            ? `${actor.name} rolled ${sum} (${summaryParts.join(', ')}).`
-            : `${actor.name} rolled ${sum} (no resources yielded).`,
+        message: `${actor.name} rolled ${sum} (${detailText}${suffix}).`,
         details: { dice: [d1, d2], sum },
       });
       return { ok: true, state };
@@ -635,6 +848,7 @@ export function applyAction(
       }
 
       actor.resources = subtractResources(actor.resources, action.bundle);
+      state.bank = addResources(state.bank, action.bundle);
       state.pendingDiscardPlayerIds = state.pendingDiscardPlayerIds.filter(
         (id) => id !== actor.id,
       );
@@ -741,20 +955,22 @@ export function applyAction(
 
       if (!isFreeRoad) {
         actor.resources = subtractResources(actor.resources, BUILD_COSTS.road);
+        state.bank = addResources(state.bank, BUILD_COSTS.road);
       }
 
       const edge = state.edges.find((e) => e.id === action.edgeId)!;
       edge.ownerId = actor.id;
       actor.roadsBuilt += 1;
 
+      const returnPhase = state.dice ? 'main' : 'roll';
       if (state.phase === 'road_building_1') {
         const nextValid = getValidRoadEdges(state, actor.id);
         state.phase =
           actor.roadsBuilt < PIECE_LIMITS.roads && nextValid.length > 0
             ? 'road_building_2'
-            : 'main';
+            : returnPhase;
       } else if (state.phase === 'road_building_2') {
-        state.phase = 'main';
+        state.phase = returnPhase;
       }
 
       appendEvent(state, {
@@ -783,6 +999,7 @@ export function applyAction(
       }
 
       actor.resources = subtractResources(actor.resources, BUILD_COSTS.settlement);
+      state.bank = addResources(state.bank, BUILD_COSTS.settlement);
       const vertex = state.vertices.find((v) => v.id === action.vertexId)!;
       vertex.building = { ownerId: actor.id, type: 'settlement' };
       actor.settlementsBuilt += 1;
@@ -813,6 +1030,7 @@ export function applyAction(
       }
 
       actor.resources = subtractResources(actor.resources, BUILD_COSTS.city);
+      state.bank = addResources(state.bank, BUILD_COSTS.city);
       const vertex = state.vertices.find((v) => v.id === action.vertexId)!;
       vertex.building = { ownerId: actor.id, type: 'city' };
       actor.settlementsBuilt -= 1;
@@ -839,6 +1057,7 @@ export function applyAction(
       }
 
       actor.resources = subtractResources(actor.resources, BUILD_COSTS.dev_card);
+      state.bank = addResources(state.bank, BUILD_COSTS.dev_card);
       const cardType = state.devDeck.pop()!;
       actor.devCards.push({
         id: `dc_${state.turnNumber}_${actor.devCards.length}_${Math.floor(rng() * 10000)}`,
@@ -874,14 +1093,10 @@ export function applyAction(
       if (card.boughtTurn === state.turnNumber) {
         return { ok: false, error: 'Cannot play a card on the same turn it was bought.' };
       }
-      if (state.phase === 'roll' && card.type !== 'knight') {
-        return { ok: false, error: 'Only Knights can be played before rolling.' };
-      }
-
-      card.played = true;
-      state.devCardPlayedThisTurn = true;
 
       if (card.type === 'knight') {
+        card.played = true;
+        state.devCardPlayedThisTurn = true;
         actor.knightsPlayed += 1;
         state.phase = 'move_robber';
         appendEvent(state, {
@@ -895,9 +1110,15 @@ export function applyAction(
 
       if (card.type === 'road_building') {
         const valid = getValidRoadEdges(state, actor.id);
-        if (actor.roadsBuilt < PIECE_LIMITS.roads && valid.length > 0) {
-          state.phase = 'road_building_1';
+        if (actor.roadsBuilt >= PIECE_LIMITS.roads || valid.length === 0) {
+          return {
+            ok: false,
+            error: 'No valid road placements or road pieces remaining.',
+          };
         }
+        card.played = true;
+        state.devCardPlayedThisTurn = true;
+        state.phase = 'road_building_1';
         appendEvent(state, {
           type: 'dev_card',
           playerId: actor.id,
@@ -910,8 +1131,19 @@ export function applyAction(
         if (!action.resource1 || !action.resource2) {
           return { ok: false, error: 'Select 2 resources for Year of Plenty.' };
         }
-        actor.resources[action.resource1] += 1;
-        actor.resources[action.resource2] += 1;
+        const needed = emptyResources();
+        needed[action.resource1] += 1;
+        needed[action.resource2] += 1;
+        if (!hasResources(state.bank, needed)) {
+          return {
+            ok: false,
+            error: 'The Bank does not have enough of the chosen resource(s).',
+          };
+        }
+        card.played = true;
+        state.devCardPlayedThisTurn = true;
+        state.bank = subtractResources(state.bank, needed);
+        actor.resources = addResources(actor.resources, needed);
         appendEvent(state, {
           type: 'dev_card',
           playerId: actor.id,
@@ -924,6 +1156,8 @@ export function applyAction(
         if (!action.resource1) {
           return { ok: false, error: 'Select a resource for Monopoly.' };
         }
+        card.played = true;
+        state.devCardPlayedThisTurn = true;
         const targetRes = action.resource1;
         let stolenTotal = 0;
         for (const p of state.players) {
@@ -953,6 +1187,9 @@ export function applyAction(
       if (action.give === action.receive) {
         return { ok: false, error: 'Cannot trade a resource for itself.' };
       }
+      if (state.bank[action.receive] < 1) {
+        return { ok: false, error: `The Bank is out of ${action.receive}.` };
+      }
       const ratios = getPlayerTradeRatios(state, actor.id);
       const ratio = ratios[action.give];
       if (actor.resources[action.give] < ratio) {
@@ -963,6 +1200,8 @@ export function applyAction(
       }
 
       actor.resources[action.give] -= ratio;
+      state.bank[action.give] += ratio;
+      state.bank[action.receive] -= 1;
       actor.resources[action.receive] += 1;
       appendEvent(state, {
         type: 'trade',
@@ -981,6 +1220,16 @@ export function applyAction(
         totalResourceCount(action.requesting) === 0
       ) {
         return { ok: false, error: 'Trade must offer and request at least 1 resource.' };
+      }
+      if (
+        RESOURCE_KEYS.some(
+          (r) => action.offering[r] > 0 && action.requesting[r] > 0,
+        )
+      ) {
+        return {
+          ok: false,
+          error: 'Cannot offer and request the same resource type.',
+        };
       }
       if (!hasResources(actor.resources, action.offering)) {
         return { ok: false, error: 'You do not possess all offered resources.' };
@@ -1069,6 +1318,7 @@ export function applyAction(
       state.activeTradeOffers = [];
       state.devCardPlayedThisTurn = false;
       state.dice = null;
+      state.lastHarvestGrants = [];
       state.activePlayerIndex = (state.activePlayerIndex + 1) % state.players.length;
       state.turnNumber += 1;
       state.phase = 'roll';
@@ -1079,6 +1329,7 @@ export function applyAction(
         playerId: nextPlayer.id,
         message: `${nextPlayer.name}'s turn begins.`,
       });
+      recomputeAwardsAndVP(state);
       return { ok: true, state };
     }
   }
@@ -1141,9 +1392,12 @@ export function sanitizeStateForPublic(state: GameState): PublicGameState {
     edges: state.edges,
     harbors: state.harbors,
     devDeckRemaining: state.devDeck.length,
+    bank: state.bank,
     devCardPlayedThisTurn: state.devCardPlayedThisTurn,
     dice: state.dice,
     diceRollSeq: state.diceRollSeq,
+    shuffleSeq: state.shuffleSeq,
+    lastHarvestGrants: state.lastHarvestGrants,
     pendingDiscardPlayerIds: state.pendingDiscardPlayerIds,
     stealCandidateIds: state.stealCandidateIds,
     activeTradeOffers: state.activeTradeOffers,
